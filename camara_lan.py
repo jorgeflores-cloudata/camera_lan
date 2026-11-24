@@ -9,6 +9,7 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from acceso import Acceso, autorizar_inicio
 from version import __version__
 
 
@@ -52,8 +53,10 @@ def _instancia_unica(nombre: str = _NOMBRE_MUTEX) -> Iterator[bool]:
 
 def elegir_modo() -> str | None:
     ventana = tk.Tk()
+    acceso = Acceso(ventana)
     ventana.title(f"LAN Camera · v{__version__}")
     ventana.resizable(False, False)
+    ventana.protocol("WM_DELETE_WINDOW", lambda: acceso.solicitar(ventana.destroy, "Close LAN Camera"))
     panel = ttk.Frame(ventana, padding=24)
     panel.grid()
     ttk.Label(panel, text="LAN Camera", font=("Segoe UI", 18, "bold")).grid(
@@ -61,15 +64,18 @@ def elegir_modo() -> str | None:
     )
     modo = None
 
-    def elegir(opcion):
-        nonlocal modo
-        modo = opcion
-        ventana.destroy()
+    def elegir(opcion: str, titulo: str) -> None:
+        def abrir() -> None:
+            nonlocal modo
+            modo = opcion
+            ventana.destroy()
 
-    ttk.Button(panel, text="Share camera", command=lambda: elegir("share")).grid(
+        acceso.solicitar(abrir, titulo)
+
+    ttk.Button(panel, text="Share camera", command=lambda: elegir("share", "Share camera")).grid(
         row=1, column=0, padx=(0, 8)
     )
-    ttk.Button(panel, text="View and control", command=lambda: elegir("view")).grid(
+    ttk.Button(panel, text="View and control", command=lambda: elegir("view", "View and control")).grid(
         row=1, column=1
     )
     ventana.mainloop()
@@ -100,7 +106,7 @@ def _ejecutar_modo(modo: str | None) -> int:
     return 0
 
 
-def main() -> int:
+def main(argumentos: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"LAN Camera {__version__}")
     alias = {"compartir": "share", "ver": "view"}
@@ -108,11 +114,13 @@ def main() -> int:
         "mode", choices=("share", "view"), nargs="?", type=lambda value: alias.get(value, value),
         help="open the selected mode",
     )
-    modo = parser.parse_args().mode
+    modo = parser.parse_args(argumentos).mode
 
     try:
         with _instancia_unica() as disponible:
             if disponible:
+                if not autorizar_inicio():
+                    return 0
                 return _ejecutar_modo(modo)
             messagebox.showwarning(
                 "LAN Camera",

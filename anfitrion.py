@@ -19,6 +19,7 @@ from tkinter import messagebox, ttk
 import cv2
 from PIL import Image, ImageDraw, ImageTk
 
+from acceso import Acceso
 from descubrimiento import AnuncioLAN
 from transporte import ErrorConexion, Servidor
 from version import __version__
@@ -30,7 +31,7 @@ _CALIDADES = {
     "alta": (960, 540, 82),
 }
 _ETIQUETAS_CALIDAD = {"Low": "baja", "Medium": "media", "High": "alta"}
-_TIEMPO_APROBACION = 30
+_TIEMPO_EVENTO = 2
 
 
 @lru_cache(maxsize=1)
@@ -100,15 +101,18 @@ def _direcciones_locales() -> list[str]:
 def _icono(activo: bool) -> Image.Image:
     imagen = Image.new("RGBA", (64, 64))
     dibujo = ImageDraw.Draw(imagen)
-    dibujo.rounded_rectangle((2, 2, 62, 62), 15, fill="#ae343b" if activo else "#435d86")
-    dibujo.rounded_rectangle((13, 19, 43, 45), 5, fill="white")
-    dibujo.polygon(((42, 25), (51, 20), (51, 44), (42, 39)), fill="white")
+    dibujo.rounded_rectangle((3, 3, 60, 60), 14, fill="#145eb5", outline="#90caff", width=2)
+    dibujo.rounded_rectangle((7, 7, 56, 29), 10, fill="#227bd3")
+    dibujo.line(((18, 23), (32, 43), (46, 23)), fill="#b8ddff", width=5)
+    for x, y in ((18, 23), (46, 23), (32, 43)):
+        dibujo.ellipse((x - 6, y - 6, x + 6, y + 6), fill="#f4faff")
+    if activo:
+        dibujo.ellipse((44, 44, 62, 62), fill="#ffbf47", outline="#123d70", width=3)
     return imagen
 
 
 @dataclass
-class _Solicitud:
-    ip: str
+class _InicioSesion:
     cancelada: threading.Event
     vence: float
     respondida: threading.Event = field(default_factory=threading.Event)
@@ -210,12 +214,12 @@ class _Captura:
 class _Anfitrion:
     def __init__(self, raiz: tk.Tk):
         self.raiz = raiz
+        self.acceso = Acceso(raiz)
         self.bandeja = None
         self.eventos: SimpleQueue = SimpleQueue()
         self.generacion = 0
         self.servidor: Servidor | None = None
         self.anuncio: AnuncioLAN | None = None
-        self.solicitud: _Solicitud | None = None
         self.captura: _Captura | None = None
         self.captura_cerrando: _Captura | None = None
         self.autorizada = False
@@ -244,11 +248,10 @@ class _Anfitrion:
         self.fps = tk.StringVar(value=str(self.fps_maximos))
         self.ajustes_remotos = tk.BooleanVar(value=False)
         self.estado = tk.StringVar(value="Camera off")
-        self.texto_solicitud = tk.StringVar(value="")
 
         self._construir(direcciones)
-        raiz.protocol("WM_DELETE_WINDOW", self._ocultar)
-        raiz.bind("<Escape>", lambda _evento: self._dejar_de_compartir())
+        raiz.protocol("WM_DELETE_WINDOW", lambda: self.acceso.solicitar(self._ocultar, "Close window"))
+        raiz.bind("<Escape>", lambda _evento: self.acceso.solicitar(self._dejar_de_compartir, "Close connection"))
         raiz.bind("<Unmap>", self._al_ocultar)
         raiz.after(35, self._bucle)
 
@@ -266,7 +269,10 @@ class _Anfitrion:
 
         panel = ttk.Frame(self.raiz, padding=22, style="Host.TFrame")
         panel.pack(fill="both", expand=True)
-        ttk.Label(panel, text="Share camera", style="Titulo.Host.TLabel").pack(anchor="w")
+        cabecera = ttk.Frame(panel, style="Host.TFrame")
+        cabecera.pack(fill="x")
+        ttk.Label(cabecera, text="Share camera", style="Titulo.Host.TLabel").pack(side="left")
+        ttk.Button(cabecera, text="Change PIN", command=self.acceso.cambiar).pack(side="right")
         self.indicador = tk.Label(
             panel, textvariable=self.estado, anchor="w", padx=10, pady=8,
             background="#e0e8f5", foreground="#1a2940", font=("Segoe UI", 11, "bold"),
@@ -300,25 +306,32 @@ class _Anfitrion:
         control.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
         self.campos.append((control, "normal"))
 
-        self.panel_solicitud = ttk.Frame(panel, padding=(0, 8), style="Host.TFrame")
         ttk.Label(
-            self.panel_solicitud, textvariable=self.texto_solicitud,
+            panel, text="Devices on this LAN can connect while sharing is enabled.",
             style="Host.TLabel", wraplength=570,
-        ).pack(anchor="w")
-        acciones = ttk.Frame(self.panel_solicitud, style="Host.TFrame")
-        acciones.pack(anchor="w", pady=(4, 0))
-        ttk.Button(acciones, text="Accept and share", command=lambda: self._responder(True)).pack(side="left")
-        ttk.Button(acciones, text="Decline", command=lambda: self._responder(False)).pack(side="left", padx=5)
+        ).pack(anchor="w", pady=(8, 0))
 
         botones = ttk.Frame(panel, style="Host.TFrame")
         botones.pack(fill="x", pady=(10, 8))
-        self.habilitar = ttk.Button(botones, text="Enable connection", command=self._habilitar)
+        self.habilitar = ttk.Button(
+            botones, text="Enable LAN sharing",
+            command=lambda: self.acceso.solicitar(self._habilitar, "Enable LAN sharing"),
+        )
         self.habilitar.pack(side="left")
-        self.pausar = ttk.Button(botones, text="Pause camera", command=self._alternar_pausa, state="disabled")
+        self.pausar = ttk.Button(
+            botones, text="Pause camera", state="disabled",
+            command=lambda: self.acceso.solicitar(self._alternar_pausa, self.pausar.cget("text")),
+        )
         self.pausar.pack(side="left", padx=6)
-        self.detener = ttk.Button(botones, text="Close connection", command=self._cerrar_conexion, state="disabled")
+        self.detener = ttk.Button(
+            botones, text="Close connection", state="disabled",
+            command=lambda: self.acceso.solicitar(self._cerrar_conexion, "Close connection"),
+        )
         self.detener.pack(side="left")
-        ttk.Button(botones, text="Minimize to tray", command=self._minimizar_a_bandeja).pack(side="right")
+        ttk.Button(
+            botones, text="Minimize to tray",
+            command=lambda: self.acceso.solicitar(self._minimizar_a_bandeja, "Minimize to tray"),
+        ).pack(side="right")
 
         self.area_previa = tk.Frame(panel, bg="#203047")
         self.area_previa.pack(fill="both", expand=True)
@@ -391,10 +404,8 @@ class _Anfitrion:
             self.bandeja.update_menu()
 
     def _mostrar_espera(self) -> None:
-        if self.solicitud is not None:
-            conexion = "Request pending"
-        elif self.anuncio is None:
-            conexion = "Waiting for a request by IP address and port"
+        if self.anuncio is None:
+            conexion = "Ready to connect by IP address and port"
         else:
             conexion = "Available on the LAN"
 
@@ -408,59 +419,37 @@ class _Anfitrion:
         else:
             self._estado(f"{conexion} · camera off")
 
-    def _solicitar(self, generacion: int, ip: str, cancelada: threading.Event) -> bool:
-        solicitud = _Solicitud(ip, cancelada, time.monotonic() + _TIEMPO_APROBACION)
-        self.eventos.put(("solicitud", generacion, solicitud))
-        while not solicitud.respondida.wait(.1):
-            if cancelada.is_set() or time.monotonic() >= solicitud.vence:
+    def _solicitar(self, generacion: int, _ip: str, cancelada: threading.Event) -> bool:
+        inicio = _InicioSesion(cancelada, time.monotonic() + _TIEMPO_EVENTO)
+        self.eventos.put(("iniciar", generacion, inicio))
+        while not inicio.respondida.wait(.1):
+            if cancelada.is_set() or time.monotonic() >= inicio.vence:
                 return False
-        return solicitud.aceptada and not cancelada.is_set() and time.monotonic() < solicitud.vence
+        return inicio.aceptada and not cancelada.is_set()
 
     def _control(self, generacion: int, pausa: bool, calidad: str, fps: int) -> dict:
-        solicitud = _Control(pausa, calidad, fps, time.monotonic() + 2)
+        solicitud = _Control(pausa, calidad, fps, time.monotonic() + _TIEMPO_EVENTO)
         self.eventos.put(("control", generacion, solicitud))
-        if not solicitud.respondido.wait(2) or solicitud.respuesta is None:
+        if not solicitud.respondido.wait(_TIEMPO_EVENTO) or solicitud.respuesta is None:
             raise ErrorConexion("The host could not apply the requested settings.")
         return solicitud.respuesta
 
-    def _mostrar_solicitud(self, solicitud: _Solicitud) -> None:
-        if solicitud.cancelada.is_set() or self.solicitud is not None or self.autorizada or not _escritorio_disponible():
-            solicitud.respondida.set()
-            return
-        if time.monotonic() >= solicitud.vence:
-            solicitud.respondida.set()
-            return
-
-        self.solicitud = solicitud
-        self.texto_solicitud.set(f"Device {solicitud.ip} is requesting to view the camera.")
-        self.panel_solicitud.pack(fill="x", before=self.pausar.master)
-        self._mostrar_espera()
-        if self._ventana_visible():
-            self.raiz.lift()
-        self.raiz.bell()
-
-    def _responder(self, aceptar: bool) -> None:
-        solicitud, self.solicitud = self.solicitud, None
-        self.panel_solicitud.pack_forget()
-        if solicitud is None:
-            return
-        if aceptar and self.servidor is not None and not solicitud.cancelada.is_set() and time.monotonic() < solicitud.vence:
-            solicitud.aceptada = self._puede_compartir()
-
-        if solicitud.aceptada:
+    def _iniciar_sesion(self, inicio: _InicioSesion) -> None:
+        if (
+            self.servidor is not None
+            and not self.autorizada
+            and not inicio.cancelada.is_set()
+            and self._puede_capturar()
+            and time.monotonic() < inicio.vence
+        ):
+            inicio.aceptada = True
             self.autorizada = True
-            self.cancelacion_activa = solicitud.cancelada
-            self.pausa_remota = False
-            self.calidad_actual = self.calidad_maxima
-            self.fps_actual = self.fps_maximos
+            self.cancelacion_activa = inicio.cancelada
             if self.pausa_local:
                 self._estado("Session paused · camera off")
             else:
-                self._estado("Session approved · starting stream", True)
-        elif self.servidor is not None:
-            self._mostrar_espera()
-        solicitud.respondida.set()
-        self._botones()
+                self._estado("Viewer connected · starting stream", True)
+        inicio.respondida.set()
 
     def _aplicar_control(self, solicitud: _Control) -> None:
         if not self.autorizada or time.monotonic() >= solicitud.vence:
@@ -511,14 +500,11 @@ class _Anfitrion:
             if not self._puede_capturar():
                 self._suspender_captura("Local desktop unavailable · camera off")
                 return
-            if self.autorizada and (self.cancelacion_activa is None or self.cancelacion_activa.is_set()):
-                self._dejar_de_compartir("Session ended · camera off")
-                return
             self.captura_cerrando = None
             self.captura = _Captura(self.indice_camara, self.calidad_actual, self.fps_actual)
             self.limite_fotograma = time.monotonic() + 10
             if self.autorizada:
-                self._estado("Opening camera for the approved session", True)
+                self._estado("Opening camera for the viewer", True)
             else:
                 self._mostrar_espera()
 
@@ -535,10 +521,15 @@ class _Anfitrion:
         self.previa.configure(image="", text="Preview · camera off")
 
     def _sesion_terminada(self) -> None:
-        if self.autorizada:
-            self._dejar_de_compartir("Viewer disconnected · camera off")
-        else:
-            self._responder(False)
+        if not self.autorizada:
+            return
+        self.autorizada = False
+        self.cancelacion_activa = None
+        self.pausa_remota = False
+        self.calidad_actual = self.calidad_maxima
+        self.fps_actual = self.fps_maximos
+        self._refrescar_captura()
+        self._mostrar_espera()
 
     def _cerrar_conexion(self) -> None:
         self._dejar_de_compartir(f"Connection closed · port {self.puerto.get()} released")
@@ -552,7 +543,6 @@ class _Anfitrion:
         if servidor is not None:
             servidor.cerrar()
         self._detener_captura()
-        self._responder(False)
         self.autorizada = False
         self.cancelacion_activa = None
         self.pausa_local = False
@@ -598,7 +588,8 @@ class _Anfitrion:
 
     def _al_ocultar(self, evento) -> None:
         if evento.widget is self.raiz and self.raiz.state() == "iconic":
-            self._minimizar_a_bandeja()
+            self.raiz.deiconify()
+            self.acceso.solicitar(self._minimizar_a_bandeja, "Minimize to tray")
 
     def _suspender_si_oculta(self) -> None:
         self._suspender_captura("Window closed · camera off")
@@ -615,8 +606,6 @@ class _Anfitrion:
             self.pausa_local = True
             self._detener_captura()
             self._botones()
-        if self.solicitud is not None:
-            self._responder(False)
         self._mostrar_espera()
 
     def _ocultar(self) -> None:
@@ -649,7 +638,7 @@ class _Anfitrion:
             self._suspender_captura("Local desktop unavailable · camera off")
             return
         if self.autorizada and (self.cancelacion_activa is None or self.cancelacion_activa.is_set()):
-            self._dejar_de_compartir("Session ended · camera off")
+            self._sesion_terminada()
             return
         if self.captura.error:
             self._dejar_de_compartir(self.captura.error)
@@ -683,23 +672,22 @@ class _Anfitrion:
                 break
 
             if accion == "abrir":
-                self._abrir()
+                self.acceso.solicitar(self._abrir, "Open")
             elif accion == "salir":
-                self._salir()
-                return
+                self.acceso.solicitar(self._salir, "Exit")
             elif generacion != self.generacion or self.servidor is None:
-                if accion == "solicitud":
+                if accion == "iniciar":
                     datos.respondida.set()
                 elif accion == "control":
                     datos.respondido.set()
-            elif accion == "solicitud":
-                self._mostrar_solicitud(datos)
+            elif accion == "iniciar":
+                self._iniciar_sesion(datos)
             elif accion == "control":
                 self._aplicar_control(datos)
             elif accion == "terminar":
                 self._sesion_terminada()
             elif accion == "cerrar_conexion":
-                self._cerrar_conexion()
+                self.acceso.solicitar(self._cerrar_conexion, "Close connection")
 
         ahora = time.monotonic()
         if self.servidor is not None and ahora - self.ultima_comprobacion >= .35:
@@ -710,10 +698,6 @@ class _Anfitrion:
                 self.autorizada or not self.pausa_local
             ):
                 self._suspender_si_oculta()
-
-        if self.solicitud is not None:
-            if self.solicitud.cancelada.is_set() or ahora >= self.solicitud.vence:
-                self._responder(False)
 
         if self.servidor is not None and not self._en_pausa():
             self._refrescar_captura()
@@ -727,6 +711,7 @@ def ejecutar() -> None:
     import pystray
 
     raiz = tk.Tk()
+    raiz.iconphoto(True, ImageTk.PhotoImage(_icono(False), master=raiz))
     anfitrion = _Anfitrion(raiz)
     anfitrion.bandeja = pystray.Icon(
         "CamaraLAN", _icono(False), "LAN Camera · camera off",

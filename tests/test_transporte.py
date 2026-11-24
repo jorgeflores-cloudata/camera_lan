@@ -80,7 +80,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
                 self.assertTrue(pendiente.wait(5))
                 self.assertFalse(conexion.done())
                 servidor.publicar(jpeg)
-                with self.assertRaisesRegex(transporte.ErrorConexion, "has not yet approved"):
+                with self.assertRaisesRegex(transporte.ErrorConexion, "not ready for video"):
                     visor.leer(False, "alta", 12)
                 self.assertFalse(transporte._ruta_huella("127.0.0.1", puerto).exists())
                 control.assert_not_called()
@@ -134,7 +134,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
     def test_rechazo_del_anfitrion_impide_la_sesion(self):
         servidor, puerto, solicitud, control, _ = self._crear_servidor(aceptar=False)
         visor = self._crear_visor(puerto)
-        with self.assertRaisesRegex(transporte.ErrorConexion, "did not approve"):
+        with self.assertRaisesRegex(transporte.ErrorConexion, "not accepting connections"):
             visor.conectar()
         self._esperar_desocupado(servidor)
         solicitud.assert_called_once()
@@ -192,7 +192,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
         servidor, puerto, solicitud, _, _ = self._crear_servidor(aceptar=False)
         for _ in range(5):
             visor = self._crear_visor(puerto)
-            with self.assertRaisesRegex(transporte.ErrorConexion, "did not approve"):
+            with self.assertRaisesRegex(transporte.ErrorConexion, "not accepting connections"):
                 visor.conectar()
             self._esperar_desocupado(servidor)
 

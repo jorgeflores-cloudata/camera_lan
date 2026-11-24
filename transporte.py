@@ -472,7 +472,7 @@ class Visor:
             ):
                 raise ErrorConexion("The camera sent an invalid connection response.")
             if not respuesta["autorizada"]:
-                raise ErrorConexion("The host did not approve the request.")
+                raise ErrorConexion("The host is not accepting connections. Check that LAN sharing is enabled.")
             with self._bloqueo:
                 if self._cerrado:
                     raise ErrorConexion("The connection was canceled.")
@@ -491,7 +491,7 @@ class Visor:
             with self._bloqueo:
                 conexion = self._conexion
                 if conexion is None or not self._aprobado:
-                    raise ErrorConexion("The host has not yet approved this connection.")
+                    raise ErrorConexion("The connection is not ready for video.")
             try:
                 vencimiento = time.monotonic() + _LECTURA + 1
                 _enviar_json(conexion, control, vencimiento)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 — 2026-11-24
+
+- Click **Connect** to view a camera by IP address and port once the host enables LAN sharing. A viewer can connect while the host is minimized to the tray.
+- When a viewer disconnects, the host keeps sharing enabled and can accept the next connection.
+- A local PIN protects app access and commands, including tray actions. The initial PIN is `0000` and can be changed from the app.
+- A blue network icon uses an amber dot to show camera activity.
+
 ## 1.2.0 — 2026-11-24
 
 - Minimizing to the tray keeps the camera, camera discovery, and approved streams running. The tray icon shows the current camera or session status.

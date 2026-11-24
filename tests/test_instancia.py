@@ -1,4 +1,5 @@
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
+from io import StringIO
 from pathlib import Path
 import subprocess
 import sys
@@ -41,9 +42,11 @@ class InstanciaUnicaTests(unittest.TestCase):
                 patch.object(sys, "argv", ["camara_lan.py", *argumentos]),
                 patch.object(camara_lan, "_instancia_unica", return_value=nullcontext(False)),
                 patch.object(camara_lan, "_ejecutar_modo") as ejecutar,
+                patch.object(camara_lan, "autorizar_inicio") as autorizar,
                 patch.object(camara_lan.messagebox, "showwarning") as aviso,
             ):
                 self.assertEqual(camara_lan.main(), 0)
+                autorizar.assert_not_called()
                 ejecutar.assert_not_called()
                 aviso.assert_called_once()
 
@@ -53,7 +56,35 @@ class InstanciaUnicaTests(unittest.TestCase):
                 self.subTest(argumento=argumento),
                 patch.object(sys, "argv", ["camara_lan.py", argumento]),
                 patch.object(camara_lan, "_instancia_unica", return_value=nullcontext(True)),
+                patch.object(camara_lan, "autorizar_inicio", return_value=True) as autorizar,
                 patch.object(camara_lan, "_ejecutar_modo", return_value=0) as ejecutar,
             ):
                 self.assertEqual(camara_lan.main(), 0)
+                autorizar.assert_called_once_with()
                 ejecutar.assert_called_once_with(modo)
+
+    def test_cancelar_el_pin_no_abre_selector_ni_modo(self):
+        for argumentos in ([], ["share"], ["view"]):
+            with (
+                self.subTest(argumentos=argumentos),
+                patch.object(camara_lan, "_instancia_unica", return_value=nullcontext(True)),
+                patch.object(camara_lan, "autorizar_inicio", return_value=False) as autorizar,
+                patch.object(camara_lan, "_ejecutar_modo") as ejecutar,
+            ):
+                self.assertEqual(camara_lan.main(argumentos), 0)
+                autorizar.assert_called_once_with()
+                ejecutar.assert_not_called()
+
+    def test_ayuda_y_version_no_solicitan_pin(self):
+        for argumento in ("--help", "--version"):
+            with (
+                self.subTest(argumento=argumento),
+                redirect_stdout(StringIO()),
+                patch.object(camara_lan, "_instancia_unica") as instancia,
+                patch.object(camara_lan, "autorizar_inicio") as autorizar,
+                self.assertRaises(SystemExit) as salida,
+            ):
+                camara_lan.main([argumento])
+            self.assertEqual(salida.exception.code, 0)
+            instancia.assert_not_called()
+            autorizar.assert_not_called()
