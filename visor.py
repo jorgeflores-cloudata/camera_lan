@@ -48,6 +48,7 @@ class _Sesion:
     ajustes: _Ajustes
     bloqueo: threading.Lock = field(default_factory=threading.Lock)
     cancelada: threading.Event = field(default_factory=threading.Event)
+    cerrar_anfitrion: threading.Event = field(default_factory=threading.Event)
     eventos: queue.SimpleQueue[tuple[str, str]] = field(default_factory=queue.SimpleQueue)
     ultimo: tuple[Image.Image | None, dict, float, _Ajustes] | None = None
 
@@ -94,6 +95,12 @@ def _recibir(
                 resultados_recientes.put(None)
 
         while not sesion.cancelada.is_set():
+            if sesion.cerrar_anfitrion.is_set():
+                sesion.visor.cerrar_anfitrion()
+                sesion.eventos.put((
+                    "cerrada", "Host app exit confirmed. Start it again on the host to reconnect.",
+                ))
+                return
             with sesion.bloqueo:
                 ajustes = sesion.ajustes
 
@@ -201,6 +208,10 @@ class _Panel:
         self.desconectar.grid(row=1, column=3, padx=(0, 8), sticky="ew")
         self.olvidar = ttk.Button(conexion, text="Forget identity", command=self._olvidar_identidad)
         self.olvidar.grid(row=1, column=4, sticky="ew")
+        self.boton_cerrar_anfitrion = ttk.Button(
+            conexion, text="Close host app", command=self._cerrar_anfitrion,
+        )
+        self.boton_cerrar_anfitrion.grid(row=2, column=2, columnspan=3, sticky="e", pady=(8, 0))
         for entrada in (self.entrada_host, self.entrada_puerto):
             entrada.bind("<Return>", self._conectar_desde_teclado)
 
@@ -417,6 +428,20 @@ class _Panel:
             self.estado.set("Requesting a pause")
             self._mostrar_mensaje("Waiting for the host to pause")
 
+    def _cerrar_anfitrion(self) -> None:
+        sesion = self.sesion
+        if (
+            sesion is None or not self.conectada or self.cerrando
+            or not sesion.visor.cierre_remoto_disponible
+            or sesion.cancelada.is_set() or sesion.cerrar_anfitrion.is_set()
+        ):
+            return
+        # El hilo de recepción envía la petición entre fotogramas; Tk no espera
+        # operaciones de red y el transporte mantiene sus lecturas serializadas.
+        sesion.cerrar_anfitrion.set()
+        self.estado.set("Requesting host app exit…")
+        self._actualizar_controles()
+
     def _actualizar_controles(self) -> None:
         conectando = self.sesion is not None
         buscando = self.busqueda is not None
@@ -429,6 +454,12 @@ class _Panel:
         )
         self.selector_recientes.configure(state="readonly" if self.recientes and disponible else "disabled")
         self.desconectar.configure(state="normal" if conectando else "disabled")
+        cierre_disponible = (
+            self.sesion is not None and self.conectada and not self.cerrando
+            and self.sesion.visor.cierre_remoto_disponible
+            and not self.sesion.cancelada.is_set() and not self.sesion.cerrar_anfitrion.is_set()
+        )
+        self.boton_cerrar_anfitrion.configure(state="normal" if cierre_disponible else "disabled")
         self.boton_pausa.configure(
             state="normal" if self.conectada else "disabled",
             text="Request resume" if self.pausa_solicitada else "Request pause",
@@ -625,7 +656,7 @@ class _Panel:
                 self._mostrar_mensaje("Waiting for the first frame")
                 self._actualizar_controles()
 
-            if self.sesion is sesion and self.conectada:
+            if self.sesion is sesion and self.conectada and not sesion.cerrar_anfitrion.is_set():
                 with sesion.bloqueo:
                     ultimo = sesion.ultimo
                     sesion.ultimo = None

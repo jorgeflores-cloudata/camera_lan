@@ -33,7 +33,9 @@ class _Control(TypedDict):
 
 
 _REDES_LAN = tuple(ipaddress.IPv4Network(red) for red in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-_PROTOCOLO = "camara-lan/3"
+_PROTOCOLO = "camara-lan/4"
+_PROTOCOLO_ANTERIOR = "camara-lan/3"
+_PROTOCOLOS = (_PROTOCOLO, _PROTOCOLO_ANTERIOR)
 _MAX_CONTROL = 1024
 _MAX_JPEG = 2 * 1024 * 1024
 _AUTENTICACION = 6
@@ -108,7 +110,7 @@ def _tls_servidor() -> ssl.SSLContext:
     contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     contexto.minimum_version = ssl.TLSVersion.TLSv1_2
     contexto.options |= ssl.OP_NO_TICKET
-    contexto.set_alpn_protocols([_PROTOCOLO])
+    contexto.set_alpn_protocols(list(_PROTOCOLOS))
     ruta = _datos_locales() / "identidad.pem"
     try:
         if not ruta.exists():
@@ -219,6 +221,7 @@ class _Sesion:
     conexion: socket.socket
     cancelado: threading.Event = field(default_factory=threading.Event)
     autorizada: bool = False
+    cierre_remoto: bool = False
 
 
 class Servidor:
@@ -231,12 +234,14 @@ class Servidor:
         al_solicitar: Callable[[str, threading.Event], bool],
         al_control: Callable[[bool, str, int], dict],
         al_terminar: Callable[[], None],
+        al_cerrar: Callable[[], None] | None = None,
     ):
         self._ip = _direccion(ip)
         self._puerto = _puerto(puerto)
         self._al_solicitar = al_solicitar
         self._al_control = al_control
         self._al_terminar = al_terminar
+        self._al_cerrar = al_cerrar
         self._bloqueo = threading.Lock()
         self._escucha: socket.socket | None = None
         self._sesion: _Sesion | None = None
@@ -340,21 +345,29 @@ class Servidor:
             vencimiento = time.monotonic() + _AUTENTICACION
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
-            if conexion.selected_alpn_protocol() != _PROTOCOLO:
+            protocolo = conexion.selected_alpn_protocol()
+            if protocolo not in _PROTOCOLOS:
                 return
             if _recibir_json(conexion, vencimiento) != {"tipo": "conectar"}:
                 return
             solicitada = True
             if not self._aprobar(conexion, sesion.cancelado, ip):
                 if not sesion.cancelado.is_set():
-                    _enviar_json(conexion, {"tipo": "resultado", "autorizada": False}, time.monotonic() + 1)
+                    respuesta = {"tipo": "resultado", "autorizada": False}
+                    if protocolo == _PROTOCOLO:
+                        respuesta["cierre_remoto"] = False
+                    _enviar_json(conexion, respuesta, time.monotonic() + 1)
                 return
             with self._bloqueo:
                 if sesion.cancelado.is_set():
                     return
                 self._imagen = None
                 sesion.autorizada = True
-            _enviar_json(conexion, {"tipo": "resultado", "autorizada": True}, time.monotonic() + 1)
+                sesion.cierre_remoto = protocolo == _PROTOCOLO and self._al_cerrar is not None
+            respuesta = {"tipo": "resultado", "autorizada": True}
+            if protocolo == _PROTOCOLO:
+                respuesta["cierre_remoto"] = sesion.cierre_remoto
+            _enviar_json(conexion, respuesta, time.monotonic() + 1)
             self._transmitir(sesion)
         except (OSError, ErrorConexion):
             pass
@@ -403,7 +416,20 @@ class Servidor:
         siguiente = time.monotonic()
         while not sesion.cancelado.is_set() and time.monotonic() < vencimiento_sesion:
             vencimiento = min(vencimiento_sesion, time.monotonic() + _LECTURA)
-            solicitado = _control(_recibir_json(sesion.conexion, vencimiento))
+            mensaje = _recibir_json(sesion.conexion, vencimiento)
+            if mensaje == {"tipo": "cerrar_anfitrion"}:
+                aceptado = sesion.cierre_remoto and self._al_cerrar is not None
+                _enviar_json(
+                    sesion.conexion, {"tipo": "cierre_anfitrion", "aceptado": aceptado}, vencimiento,
+                )
+                if aceptado:
+                    # Confirma la petición antes de cerrar el canal. El callback
+                    # encola la salida de la aplicación en el hilo de su interfaz.
+                    self.cerrar()
+                    self._al_cerrar()
+                    return
+                continue
+            solicitado = _control(mensaje)
             demora = max(0.0, siguiente - time.monotonic())
             if sesion.cancelado.wait(demora) or time.monotonic() >= vencimiento_sesion:
                 return
@@ -427,6 +453,12 @@ class Visor:
         self._conexion: socket.socket | None = None
         self._cerrado = False
         self._aprobado = False
+        self._cierre_remoto_disponible = False
+
+    @property
+    def cierre_remoto_disponible(self) -> bool:
+        with self._bloqueo:
+            return self._aprobado and self._cierre_remoto_disponible
 
     @staticmethod
     def olvidar(ip: str, puerto: int) -> None:
@@ -447,7 +479,7 @@ class Visor:
             contexto.minimum_version = ssl.TLSVersion.TLSv1_2
             contexto.check_hostname = False
             contexto.verify_mode = ssl.CERT_NONE
-            contexto.set_alpn_protocols([_PROTOCOLO])
+            contexto.set_alpn_protocols(list(_PROTOCOLOS))
             with self._bloqueo:
                 if self._cerrado:
                     raise ErrorConexion("The connection was canceled.")
@@ -455,7 +487,8 @@ class Visor:
                 self._conexion = conexion
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
-            if conexion.selected_alpn_protocol() != _PROTOCOLO:
+            protocolo = conexion.selected_alpn_protocol()
+            if protocolo not in _PROTOCOLOS:
                 raise ErrorConexion("Update LAN Camera on both computers to a compatible version.")
             certificado = conexion.getpeercert(binary_form=True)
             if not certificado:
@@ -465,10 +498,14 @@ class Visor:
             fijada = _comprobar_huella(ruta, huella)
             _enviar_json(conexion, {"tipo": "conectar"}, vencimiento)
             respuesta = _recibir_json(conexion, time.monotonic() + _APROBACION + 2)
+            campos = {"tipo", "autorizada"}
+            if protocolo == _PROTOCOLO:
+                campos.add("cierre_remoto")
             if (
-                set(respuesta) != {"tipo", "autorizada"}
+                set(respuesta) != campos
                 or respuesta["tipo"] != "resultado"
                 or type(respuesta["autorizada"]) is not bool
+                or (protocolo == _PROTOCOLO and type(respuesta["cierre_remoto"]) is not bool)
             ):
                 raise ErrorConexion("The camera sent an invalid connection response.")
             if not respuesta["autorizada"]:
@@ -481,6 +518,7 @@ class Visor:
                     if not _comprobar_huella(ruta, huella):
                         raise ErrorConexion("Could not save the camera's identity.")
                 self._aprobado = True
+                self._cierre_remoto_disponible = respuesta.get("cierre_remoto", False)
         except (OSError, ErrorConexion):
             self.cerrar()
             raise
@@ -504,10 +542,35 @@ class Visor:
                 self.cerrar()
                 raise
 
+    def cerrar_anfitrion(self) -> None:
+        """Solicita la salida del anfitrión y espera su confirmación por TLS."""
+        with self._peticion:
+            with self._bloqueo:
+                conexion = self._conexion
+                if conexion is None or not self._aprobado:
+                    raise ErrorConexion("Connect to the host before requesting its exit.")
+                if not self._cierre_remoto_disponible:
+                    raise ErrorConexion("Update the host app to enable remote exit.")
+            try:
+                vencimiento = time.monotonic() + _LECTURA
+                _enviar_json(conexion, {"tipo": "cerrar_anfitrion"}, vencimiento)
+                respuesta = _recibir_json(conexion, vencimiento)
+                if (
+                    set(respuesta) != {"tipo", "aceptado"}
+                    or respuesta["tipo"] != "cierre_anfitrion"
+                    or respuesta["aceptado"] is not True
+                ):
+                    raise ErrorConexion("The host did not confirm the exit request.")
+            except (OSError, ErrorConexion):
+                self.cerrar()
+                raise
+            self.cerrar()
+
     def cerrar(self) -> None:
         with self._bloqueo:
             self._cerrado = True
             self._aprobado = False
+            self._cierre_remoto_disponible = False
             conexion, self._conexion = self._conexion, None
             if conexion is not None:
                 _apagar(conexion)

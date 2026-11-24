@@ -345,6 +345,38 @@ class VistaPreviaTests(unittest.TestCase):
                 accion.assert_called_once_with()
                 self.host.acceso.solicitar.reset_mock()
 
+    def test_cierre_remoto_sale_de_la_aplicacion_y_libera_recursos_sin_pin(self):
+        self.host._habilitar()
+        self._conectar_visor()
+        self.host._minimizar_a_bandeja()
+        self.host.bandeja = Mock()
+        solicitar_cierre = anfitrion.Servidor.call_args.kwargs["al_cerrar"]
+
+        solicitar_cierre()
+        self.raiz.destroy.assert_not_called()
+        self.host._bucle()
+
+        self.assertTrue(self.host.salir)
+        self.raiz.destroy.assert_called_once_with()
+        self.captura.detener.assert_called_once_with()
+        self.anuncio.cerrar.assert_called_once_with()
+        self.servidor.cerrar.assert_called_once_with()
+        self.host.bandeja.stop.assert_called_once_with()
+        self.host.acceso.solicitar.assert_not_called()
+
+    def test_cierre_remoto_atrasado_no_cierra_una_nueva_conexion(self):
+        self.host._habilitar()
+        solicitar_cierre_anterior = anfitrion.Servidor.call_args.kwargs["al_cerrar"]
+        self.host._cerrar_conexion()
+        self.host._habilitar()
+
+        solicitar_cierre_anterior()
+        self.host._bucle()
+
+        self.assertFalse(self.host.salir)
+        self.assertIs(self.host.servidor, self.servidor)
+        self.raiz.destroy.assert_not_called()
+
     def test_cerrar_conexion_detiene_la_previa_y_libera_el_servidor(self):
         self.host._habilitar()
         self.host._minimizar_a_bandeja()

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.0 — 2026-11-24
+
+- **Close host app** in the Viewer exits LAN Camera on the host, even when minimized to the Windows tray. It is available for every active connection to an updated host, without an extra setting or PIN prompt.
+- Remote exit stops the camera and discovery, releases the listening port, and finalizes any active Viewer recording. The host computer remains on.
+- Older versions remain compatible for video streaming; update both devices to use remote exit.
+
 ## 1.6.1 — 2026-11-24
 
 - The Windows tray tooltip shows the version number only.

@@ -1,6 +1,6 @@
 # LAN Camera
 
-Current version **1.6.1**. See the [changelog](CHANGELOG.md).
+Current version **1.7.0**. See the [changelog](CHANGELOG.md).
 
 Connect two devices to the same local network. Run **Share** on the Windows 11 device with the camera and **View** on the other device.
 
@@ -28,6 +28,8 @@ The Viewer saves the IP address and port of the ten most recent successful conne
 **Minimize to tray** and the Windows minimize button hide the window and leave the blue network icon by the clock. The camera, new connections, an active stream, discovery, and viewer controls continue in the background. Choose **Open** to restore the window. An amber dot indicates that the camera is on or starting. Hover over the icon to see the version number.
 
 Choose **Close connection** in the host window or on the tray icon to stop the camera, disconnect the viewer, and release the port. The title-bar **X** or locking Windows turns off the camera and ends an active session. If the camera was waiting for a viewer, click **Resume camera** after returning.
+
+Use **Close host app** in the Viewer to exit LAN Camera on the host, including when it is minimized to the tray. This option is available during any active connection to an updated host, with no extra setting or PIN prompt. It stops the camera and discovery, releases the port, and leaves the host computer running. Start LAN Camera again on that computer to reconnect. The Viewer stays open and finishes any active recording. Update both devices to use remote exit; older versions can still stream video.
 
 LAN Camera runs once per Windows session. To switch modes or load an update, choose **Exit** on the tray icon before starting it again. **Share.cmd** and **View.cmd** are also available in the project root.
 

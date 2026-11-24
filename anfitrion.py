@@ -368,6 +368,7 @@ class _Anfitrion:
                 lambda ip_visora, cancelada: self._solicitar(generacion, ip_visora, cancelada),
                 lambda pausa, calidad, fps: self._control(generacion, pausa, calidad, fps),
                 lambda: self.eventos.put(("terminar", generacion, None)),
+                al_cerrar=lambda: self.eventos.put(("salir_remoto", generacion, None)),
             )
             servidor.iniciar()
         except ErrorConexion as error:
@@ -681,6 +682,9 @@ class _Anfitrion:
                 self._iniciar_sesion(datos)
             elif accion == "control":
                 self._aplicar_control(datos)
+            elif accion == "salir_remoto":
+                self._salir()
+                return
             elif accion == "terminar":
                 self._sesion_terminada()
             elif accion == "cerrar_conexion":
