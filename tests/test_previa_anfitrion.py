@@ -27,6 +27,8 @@ class VistaPreviaTests(unittest.TestCase):
     def setUp(self):
         self.raiz = Mock()
         self.raiz.state.return_value = "normal"
+        self.raiz.withdraw.side_effect = lambda: setattr(self.raiz.state, "return_value", "withdrawn")
+        self.raiz.deiconify.side_effect = lambda: setattr(self.raiz.state, "return_value", "normal")
         with (
             patch.object(anfitrion.tk, "StringVar", _Variable),
             patch.object(anfitrion.tk, "BooleanVar", _Variable),
@@ -95,7 +97,6 @@ class VistaPreviaTests(unittest.TestCase):
 
     def test_ocultar_apaga_la_previa_y_exige_reanudarla(self):
         self.host._habilitar()
-        self.raiz.state.return_value = "withdrawn"
 
         self.host._ocultar()
         self.host._bucle()
@@ -110,7 +111,6 @@ class VistaPreviaTests(unittest.TestCase):
         self.captura.viva.return_value = False
         self.host._abrir()
         self.raiz.deiconify.assert_called_once_with()
-        self.raiz.state.return_value = "normal"
         self.host._bucle()
         self.crear_captura.assert_called_once()
 
@@ -118,39 +118,99 @@ class VistaPreviaTests(unittest.TestCase):
         self.host._bucle()
         self.assertEqual(self.crear_captura.call_count, 2)
 
-    def test_minimizar_desde_el_titulo_oculta_y_cierra_la_sesion(self):
+    def test_minimizar_a_la_bandeja_conserva_la_previa_local(self):
+        self.host._habilitar()
+        self.host._bucle()
+
+        self.host._minimizar_a_bandeja()
+        self.host.ultima_comprobacion = time.monotonic() - 1
+        self.host._bucle()
+
+        self.raiz.withdraw.assert_called_once_with()
+        self.crear_captura.assert_called_once()
+        self.captura.detener.assert_not_called()
+        self.servidor.cerrar.assert_not_called()
+        self.anuncio.cerrar.assert_not_called()
+        self.servidor.publicar.assert_not_called()
+        self.assertIs(self.host.captura, self.captura)
+        self.assertFalse(self.host.pausa_local)
+
+        self.crear_foto.reset_mock()
+        self.host._abrir()
+        self.host._bucle()
+
+        self.raiz.deiconify.assert_called_once_with()
+        self.crear_captura.assert_called_once()
+        self.crear_foto.assert_called_once()
+        self.host.previa.configure.assert_called_with(image=self.crear_foto.return_value, text="")
+
+    def test_minimizar_desde_el_titulo_mantiene_el_video_y_los_controles(self):
+        self.host.ajustes_remotos.set(True)
         self.host._habilitar()
         solicitud = self._solicitud()
         self.host._mostrar_solicitud(solicitud)
         self.host._responder(True)
         self.assertTrue(solicitud.aceptada)
+        self.host._bucle()
+        self.servidor.publicar.reset_mock()
         self.raiz.state.return_value = "iconic"
 
         self.host._al_ocultar(SimpleNamespace(widget=self.raiz))
+        control = anfitrion._Control(False, "baja", 5, time.monotonic() + 30)
+        self.host.eventos.put(("control", self.host.generacion, control))
+        self.host.ultima_comprobacion = time.monotonic() - 1
+        self.host._bucle()
 
         self.raiz.withdraw.assert_called_once_with()
-        self.captura.detener.assert_called_once()
-        self.servidor.cerrar.assert_called_once()
-        self.assertIsNone(self.host.servidor)
+        self.captura.detener.assert_not_called()
+        self.servidor.cerrar.assert_not_called()
+        self.anuncio.cerrar.assert_not_called()
+        self.assertTrue(self.host.autorizada)
+        self.assertTrue(control.respondido.is_set())
+        self.assertEqual(control.respuesta, {"pausa": False, "calidad": "baja", "fps": 5})
+        self.servidor.publicar.assert_called_once_with(self.jpeg)
+
+    def test_el_visor_puede_pausar_y_reanudar_mientras_el_anfitrion_esta_en_bandeja(self):
+        self.host.ajustes_remotos.set(True)
+        self.host._habilitar()
+        self.host._mostrar_solicitud(self._solicitud())
+        self.host._responder(True)
+        self.host._minimizar_a_bandeja()
+
+        pausar = anfitrion._Control(True, "media", 10, time.monotonic() + 30)
+        self.host._aplicar_control(pausar)
+        self.captura.detener.assert_called_once_with()
+        self.servidor.publicar.assert_called_once_with(None)
+        self.assertTrue(pausar.respuesta["pausa"])
+
+        self.captura.viva.return_value = False
+        reanudar = anfitrion._Control(False, "media", 10, time.monotonic() + 30)
+        self.host._aplicar_control(reanudar)
+        self.host._bucle()
+
+        self.assertTrue(self.host.autorizada)
+        self.assertFalse(reanudar.respuesta["pausa"])
+        self.assertEqual(self.crear_captura.call_count, 2)
+        self.servidor.publicar.assert_called_with(self.jpeg)
 
     def test_solicitud_en_bandeja_espera_sin_restaurar_y_puede_vencer(self):
         self.host.bandeja = Mock()
         self.host._habilitar()
-        self.raiz.state.return_value = "withdrawn"
-        self.host._ocultar()
+        self.host._minimizar_a_bandeja()
         solicitud = self._solicitud()
         self.host.eventos.put(("solicitud", self.host.generacion, solicitud))
         self.host.ultima_comprobacion = time.monotonic() - 1
 
         self.host._bucle()
 
-        self.assertIn("Solicitud pendiente", self.host.bandeja.title)
+        self.assertIn("Request pending", self.host.bandeja.title)
         self.raiz.deiconify.assert_not_called()
         self.raiz.lift.assert_not_called()
         self.crear_captura.assert_called_once()
-        self.assertIsNone(self.host.captura)
+        self.assertIs(self.host.captura, self.captura)
         self.assertIs(self.host.solicitud, solicitud)
         self.assertFalse(solicitud.respondida.is_set())
+        self.servidor.publicar.assert_not_called()
 
         solicitud.vence = time.monotonic() - 1
         self.host._bucle()
@@ -161,10 +221,46 @@ class VistaPreviaTests(unittest.TestCase):
         self.raiz.deiconify.assert_not_called()
         self.servidor.cerrar.assert_not_called()
 
+    def test_abrir_desde_la_bandeja_permite_aprobar_la_solicitud(self):
+        self.host._habilitar()
+        solicitud = self._solicitud()
+        self.host._mostrar_solicitud(solicitud)
+        self.host._minimizar_a_bandeja()
+
+        self.host._bucle()
+
+        self.assertIs(self.host.solicitud, solicitud)
+        self.assertFalse(solicitud.respondida.is_set())
+        self.assertFalse(self.host.autorizada)
+        self.servidor.publicar.assert_not_called()
+
+        self.host.eventos.put(("abrir", None, None))
+        self.host._bucle()
+        self.host._responder(True)
+        self.host._bucle()
+
+        self.raiz.deiconify.assert_called_once_with()
+        self.assertTrue(solicitud.aceptada)
+        self.servidor.publicar.assert_called_once_with(self.jpeg)
+
+    def test_aprobar_requiere_una_ventana_visible(self):
+        self.host._habilitar()
+        self.host._minimizar_a_bandeja()
+        solicitud = self._solicitud()
+        self.host._mostrar_solicitud(solicitud)
+
+        self.host._responder(True)
+        self.host._bucle()
+
+        self.assertFalse(solicitud.aceptada)
+        self.assertFalse(self.host.autorizada)
+        self.servidor.publicar.assert_not_called()
+
     def test_bloquear_el_escritorio_apaga_la_previa_y_rechaza_la_solicitud(self):
         self.host._habilitar()
         solicitud = self._solicitud()
         self.host._mostrar_solicitud(solicitud)
+        self.host._minimizar_a_bandeja()
         self.escritorio.return_value = False
 
         self.host._bucle()
@@ -176,10 +272,27 @@ class VistaPreviaTests(unittest.TestCase):
         self.assertIsNone(self.host.captura)
         self.servidor.cerrar.assert_not_called()
 
+    def test_bloquear_el_escritorio_cierra_la_transmision_en_bandeja(self):
+        self.host._habilitar()
+        solicitud = self._solicitud()
+        self.host._mostrar_solicitud(solicitud)
+        self.host._responder(True)
+        self.host._minimizar_a_bandeja()
+        self.escritorio.return_value = False
+
+        self.host._bucle()
+
+        self.captura.detener.assert_called_once_with()
+        self.servidor.cerrar.assert_called_once_with()
+        self.servidor.publicar.assert_not_called()
+        self.assertFalse(self.host.autorizada)
+
     def test_cerrar_conexion_detiene_la_previa_y_libera_el_servidor(self):
         self.host._habilitar()
+        self.host._minimizar_a_bandeja()
 
-        self.host._cerrar_conexion()
+        self.host.eventos.put(("cerrar_conexion", self.host.generacion, None))
+        self.host._bucle()
 
         self.captura.detener.assert_called_once()
         self.anuncio.cerrar.assert_called_once()

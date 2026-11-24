@@ -1,31 +1,36 @@
-# Cambios
+# Changelog
+
+## 1.2.0 — 2026-11-24
+
+- Minimizing to the tray keeps the camera, camera discovery, and approved streams running. The tray icon shows the current camera or session status.
+- The user interface, tray menu, messages, launcher scripts, and documentation are in English. Run `Setup.cmd`, `Share.cmd`, `View.cmd`, or `Build.cmd`. Existing launchers remain compatible.
 
 ## 1.1.2 — 2026-11-24
 
-- **Minimizar a la bandeja** y el botón de minimizar de Windows dejan solo el icono junto al reloj. El menú del icono permite volver a abrir la ventana.
-- Una solicitud recibida mientras la ventana está oculta se mantiene pendiente sin abrir la ventana automáticamente.
+- The **Minimize to tray** and Windows minimize buttons leave the icon by the clock. Open the window again from the icon.
+- Requests received while the window is hidden remain pending until the host responds or the request expires.
 
 ## 1.1.1 — 2026-11-24
 
-- **Habilitar conexión** abre la vista previa local. El visor recibe video después de que el anfitrión pulse **Aceptar y compartir**.
-- Es posible pausar la cámara mientras se esperan solicitudes. Al ocultar la ventana o bloquear Windows, la vista previa se apaga y requiere reanudación local.
+- Enabling the connection starts the local preview. The viewer receives video after the host approves sharing.
+- The host can pause the camera while waiting for requests. Hiding the window or locking Windows turns off the preview until the host resumes it.
 
 ## 1.1.0 — 2026-11-24
 
-- El visor descubre cámaras en la LAN y admite conexión manual por IPv4 y puerto. Cada sesión requiere aprobación en el anfitrión y el video se transmite por TLS.
-- El visor recuerda la identidad de la cámara después de la primera conexión aprobada y bloquea cambios inesperados.
-- Cámara LAN permite una sola instancia por sesión de Windows, incluso si se abre desde otra carpeta o en otro modo.
-- **Cerrar conexión** está disponible en la ventana de Compartir y en el icono junto al reloj. Libera el puerto configurado y apaga la cámara si estaba activa.
-- Si el puerto está ocupado, Cámara LAN muestra el número de puerto y cómo resolver el conflicto.
+- The viewer discovers cameras on the LAN and can connect by IPv4 address and port. The host approves each session and video travels over TLS.
+- The viewer remembers the camera's identity after the first approved connection and blocks unexpected changes.
+- LAN Camera allows one instance per Windows session, across modes and project folders.
+- The host can close the connection from the window or tray icon. Closing releases the configured port and turns off the camera.
+- A port conflict shows which port is in use and how to resolve it.
 
-Actualiza ambos equipos para conectarte sin código.
+Update both devices to connect without a code.
 
 ## 1.0.1 — 2026-11-24
 
-- Código privado aleatorio de exactamente ocho dígitos, incluidos ceros iniciales.
-- Campo de código más legible al compartir y entrada numérica en el visor.
-- Emparejamiento con SPAKE2 vinculado al certificado TLS, sin enviar el código privado.
-- Límite de cinco intentos de conexión por minuto; se conserva la aprobación local de cada sesión.
-- Pruebas de conexión cifrada, validación, rechazo y límite de intentos sin activar la cámara.
+- A random eight-digit private code can include leading zeros.
+- The host shows a larger code field and the viewer accepts numeric input.
+- SPAKE2 ties pairing to the TLS certificate and keeps the private code off the network.
+- The host approves each session and limits connections to five attempts per minute.
+- Tests verify encrypted connections, validation, rejection, and rate limiting with simulated video.
 
-Ambos equipos deben actualizarse y volver a ejecutar `Preparar.cmd`.
+Update both devices and run the setup script again.

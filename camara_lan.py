@@ -1,4 +1,4 @@
-"""Entrada para los modos Compartir y Ver de Cámara LAN."""
+"""Share or view a camera on the local network."""
 
 import argparse
 from collections.abc import Iterator
@@ -38,7 +38,7 @@ def _instancia_unica(nombre: str = _NOMBRE_MUTEX) -> Iterator[bool]:
     mutex = crear(None, False, nombre)
     error = ctypes.get_last_error()
     if not mutex:
-        raise _ErrorInstancia(str(ctypes.WinError(error)))
+        raise _ErrorInstancia(error, "Could not open the application lock.")
     if error == _ERROR_YA_EXISTE:
         cerrar(mutex)
         yield False
@@ -52,11 +52,11 @@ def _instancia_unica(nombre: str = _NOMBRE_MUTEX) -> Iterator[bool]:
 
 def elegir_modo() -> str | None:
     ventana = tk.Tk()
-    ventana.title(f"Cámara LAN · v{__version__}")
+    ventana.title(f"LAN Camera · v{__version__}")
     ventana.resizable(False, False)
     panel = ttk.Frame(ventana, padding=24)
     panel.grid()
-    ttk.Label(panel, text="Cámara LAN", font=("Segoe UI", 18, "bold")).grid(
+    ttk.Label(panel, text="LAN Camera", font=("Segoe UI", 18, "bold")).grid(
         row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
     )
     modo = None
@@ -66,10 +66,10 @@ def elegir_modo() -> str | None:
         modo = opcion
         ventana.destroy()
 
-    ttk.Button(panel, text="Compartir cámara", command=lambda: elegir("compartir")).grid(
+    ttk.Button(panel, text="Share camera", command=lambda: elegir("share")).grid(
         row=1, column=0, padx=(0, 8)
     )
-    ttk.Button(panel, text="Ver y controlar", command=lambda: elegir("ver")).grid(
+    ttk.Button(panel, text="View and control", command=lambda: elegir("view")).grid(
         row=1, column=1
     )
     ventana.mainloop()
@@ -80,19 +80,19 @@ def _ejecutar_modo(modo: str | None) -> int:
     modo = modo or elegir_modo()
     if modo is None:
         return 0
-    if modo == "compartir" and sys.platform != "win32":
-        messagebox.showerror("Cámara LAN", "El modo Compartir requiere Windows 11.")
+    if modo == "share" and sys.platform != "win32":
+        messagebox.showerror("LAN Camera", "Sharing a camera requires Windows 11.")
         return 1
 
     try:
-        if modo == "compartir":
+        if modo == "share":
             from anfitrion import ejecutar
         else:
             from visor import ejecutar
     except ImportError:
         messagebox.showerror(
-            "Cámara LAN",
-            "Faltan dependencias. En Windows, ejecuta primero Preparar.cmd.",
+            "LAN Camera",
+            "Some dependencies are missing. On Windows, run Setup.cmd first.",
         )
         return 1
 
@@ -102,22 +102,28 @@ def _ejecutar_modo(modo: str | None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", action="version", version=f"Cámara LAN {__version__}")
-    parser.add_argument("modo", choices=("compartir", "ver"), nargs="?")
-    modo = parser.parse_args().modo
+    parser.add_argument("--version", action="version", version=f"LAN Camera {__version__}")
+    alias = {"compartir": "share", "ver": "view"}
+    parser.add_argument(
+        "mode", choices=("share", "view"), nargs="?", type=lambda value: alias.get(value, value),
+        help="open the selected mode",
+    )
+    modo = parser.parse_args().mode
 
     try:
         with _instancia_unica() as disponible:
             if disponible:
                 return _ejecutar_modo(modo)
             messagebox.showwarning(
-                "Cámara LAN",
-                "Cámara LAN ya está abierta. Usa la ventana existente. "
-                "Si Compartir está oculto, ábrelo desde el icono junto al reloj.",
+                "LAN Camera",
+                "LAN Camera is already running. Use the existing window. "
+                "If the sharing window is hidden, open it from the system tray.",
             )
             return 0
     except _ErrorInstancia as error:
-        messagebox.showerror("Cámara LAN", f"No se pudo comprobar si Cámara LAN ya está abierta.\n\n{error}")
+        messagebox.showerror(
+            "LAN Camera", f"Could not check if LAN Camera is already running (Windows error {error.errno}).",
+        )
         return 1
 
 

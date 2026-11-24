@@ -104,7 +104,7 @@ def _interfaces_locales() -> dict[str, ipaddress.IPv4Network | None]:
 def _nombre_local() -> bytes:
     nombre = "".join(caracter for caracter in socket.gethostname() if caracter.isprintable()).strip()
     nombre = nombre.encode("utf-8", errors="ignore")[:_MAX_NOMBRE].decode("utf-8", errors="ignore").strip()
-    return nombre.encode("utf-8") or b"Camara LAN"
+    return nombre.encode("utf-8") or b"LAN Camera"
 
 
 def _leer_solicitud(datos: bytes) -> bytes | None:
@@ -134,7 +134,7 @@ class AnuncioLAN:
 
     def __init__(self, ip: str, puerto: int):
         if _ip_privada(ip) is None or type(puerto) is not int or not 1 <= puerto <= 65535:
-            raise ValueError("La búsqueda LAN requiere una IPv4 privada y un puerto válido.")
+            raise ValueError("LAN discovery requires a private IPv4 address and a valid port.")
         self._ip = ip
         self._puerto = puerto
         self._cerrado = threading.Event()
@@ -146,7 +146,7 @@ class AnuncioLAN:
             return
         red = _interfaces_locales().get(self._ip)
         if sys.platform == "win32" and red is None:
-            raise OSError("La IPv4 elegida ya no está disponible para la búsqueda en la LAN.")
+            raise OSError("The selected IPv4 address is no longer available for LAN discovery.")
         descripcion = self._puerto.to_bytes(2, "big") + _nombre_local()
         with ExitStack() as recursos:
             escucha = recursos.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))

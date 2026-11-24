@@ -22,6 +22,8 @@ _RED_LOCAL = tuple(
     ipaddress.IPv4Network(red)
     for red in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
+_ETIQUETAS_CALIDAD = {"baja": "Low", "media": "Medium", "alta": "High"}
+_VALORES_CALIDAD = {etiqueta: valor for valor, etiqueta in _ETIQUETAS_CALIDAD.items()}
 _COLOR_FONDO = "#100c19"
 _COLOR_TEXTO = "#eee8f6"
 _MAXIMO_PIXELES = 4_194_304
@@ -55,10 +57,10 @@ def _direccion(texto: str) -> str:
     try:
         direccion = ipaddress.IPv4Address(texto.strip())
     except ipaddress.AddressValueError:
-        raise ValueError("Escribe la dirección IPv4 local que muestra el anfitrión.") from None
+        raise ValueError("Enter the local IPv4 address shown on the host.") from None
 
     if not any(direccion in red for red in _RED_LOCAL):
-        raise ValueError("La dirección debe pertenecer a la red privada del anfitrión.")
+        raise ValueError("The address must be on the host's private network.")
     return str(direccion)
 
 
@@ -69,7 +71,7 @@ def _decodificar(jpeg: bytes) -> Image.Image:
                 raise ValueError
             return imagen.convert("RGB")
     except (Image.DecompressionBombError, OSError, ValueError):
-        raise ErrorConexion("El anfitrión envió una imagen que no se puede mostrar.") from None
+        raise ErrorConexion("The host sent an image that could not be displayed.") from None
 
 
 def _recibir(sesion: _Sesion) -> None:
@@ -103,7 +105,7 @@ def _recibir(sesion: _Sesion) -> None:
             sesion.eventos.put(("cerrada", str(error)))
     except Exception:
         if not sesion.cancelada.is_set():
-            sesion.eventos.put(("cerrada", "No se pudo continuar la conexión con el anfitrión."))
+            sesion.eventos.put(("cerrada", "The connection to the host was interrupted."))
     finally:
         sesion.visor.cerrar()
 
@@ -131,13 +133,13 @@ class _Panel:
         self.host = tk.StringVar()
         self.puerto = tk.StringVar(value="8443")
         self.camara_elegida = tk.StringVar()
-        self.calidad = tk.StringVar(value="media")
+        self.calidad = tk.StringVar(value=_ETIQUETAS_CALIDAD["media"])
         self.fps = tk.StringVar(value="8")
-        self.estado = tk.StringVar(value="Desconectado")
-        self.efectivos = tk.StringVar(value="Ajustes efectivos · —")
+        self.estado = tk.StringVar(value="Disconnected")
+        self.efectivos = tk.StringVar(value="Applied settings · —")
         self.aviso_ajustes = tk.StringVar()
 
-        raiz.title(f"Cámara LAN — Visor · v{__version__}")
+        raiz.title(f"LAN Camera — Viewer · v{__version__}")
         raiz.minsize(680, 480)
         raiz.geometry("900x630")
         raiz.protocol("WM_DELETE_WINDOW", self._salir)
@@ -147,29 +149,29 @@ class _Panel:
 
         panel = ttk.Frame(raiz, padding=18)
         panel.pack(expand=True, fill="both")
-        ttk.Label(panel, text="Cámara LAN · Visor", style="Titulo.TLabel").pack(anchor="w")
-        ttk.Label(panel, text="El anfitrión debe aprobar cada conexión desde su equipo.").pack(anchor="w", pady=(0, 12))
+        ttk.Label(panel, text="LAN Camera · Viewer", style="Titulo.TLabel").pack(anchor="w")
+        ttk.Label(panel, text="The host must approve each connection on their device.").pack(anchor="w", pady=(0, 12))
 
         busqueda = ttk.Frame(panel)
         busqueda.pack(fill="x", pady=(0, 12))
         busqueda.columnconfigure(0, weight=1)
-        ttk.Label(busqueda, text="Cámaras en la red local").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(busqueda, text="Cameras on the local network").grid(row=0, column=0, sticky="w", pady=(0, 4))
         self.selector_camaras = ttk.Combobox(busqueda, textvariable=self.camara_elegida, state="disabled")
         self.selector_camaras.grid(row=1, column=0, sticky="ew", padx=(0, 8))
         self.selector_camaras.bind("<<ComboboxSelected>>", self._elegir_camara)
-        self.boton_buscar = ttk.Button(busqueda, text="Buscar cámaras", command=self._alternar_busqueda)
+        self.boton_buscar = ttk.Button(busqueda, text="Find cameras", command=self._alternar_busqueda)
         self.boton_buscar.grid(row=1, column=1, sticky="ew")
 
         conexion = ttk.Frame(panel)
         conexion.pack(fill="x")
         conexion.columnconfigure(0, weight=1)
-        self.entrada_host = self._campo(conexion, "IPv4 del anfitrión", self.host, 0, width=17)
-        self.entrada_puerto = self._campo(conexion, "Puerto", self.puerto, 1, width=7)
-        self.conectar = ttk.Button(conexion, text="Solicitar conexión", command=self._solicitar)
+        self.entrada_host = self._campo(conexion, "Host IPv4 address", self.host, 0, width=17)
+        self.entrada_puerto = self._campo(conexion, "Port", self.puerto, 1, width=7)
+        self.conectar = ttk.Button(conexion, text="Request access", command=self._solicitar)
         self.conectar.grid(row=1, column=2, padx=(0, 8), sticky="ew")
-        self.desconectar = ttk.Button(conexion, text="Desconectar", command=self._detener)
+        self.desconectar = ttk.Button(conexion, text="Disconnect", command=self._detener)
         self.desconectar.grid(row=1, column=3, padx=(0, 8), sticky="ew")
-        self.olvidar = ttk.Button(conexion, text="Olvidar identidad", command=self._olvidar_identidad)
+        self.olvidar = ttk.Button(conexion, text="Forget identity", command=self._olvidar_identidad)
         self.olvidar.grid(row=1, column=4, sticky="ew")
         for entrada in (self.entrada_host, self.entrada_puerto):
             entrada.bind("<Return>", self._solicitar_desde_teclado)
@@ -179,18 +181,18 @@ class _Panel:
         self.lienzo.pack(expand=True, fill="both")
         self.objeto_imagen = self.lienzo.create_image(0, 0)
         self.objeto_mensaje = self.lienzo.create_text(
-            0, 0, text="Conéctate para ver la imagen en directo", fill=_COLOR_TEXTO,
+            0, 0, text="Connect to view live video", fill=_COLOR_TEXTO,
             justify="center", font=("Segoe UI", 13)
         )
         self.lienzo.bind("<Configure>", self._ajustar_lienzo)
 
         ajustes = ttk.Frame(panel)
         ajustes.pack(fill="x", pady=(12, 4))
-        self.boton_pausa = ttk.Button(ajustes, text="Solicitar pausa", command=self._alternar_pausa)
+        self.boton_pausa = ttk.Button(ajustes, text="Request pause", command=self._alternar_pausa)
         self.boton_pausa.pack(side="left", padx=(0, 14))
-        ttk.Label(ajustes, text="Calidad").pack(side="left", padx=(0, 5))
+        ttk.Label(ajustes, text="Quality").pack(side="left", padx=(0, 5))
         self.selector_calidad = ttk.Combobox(
-            ajustes, textvariable=self.calidad, values=("baja", "media", "alta"), width=7
+            ajustes, textvariable=self.calidad, values=tuple(_ETIQUETAS_CALIDAD.values()), width=7
         )
         self.selector_calidad.pack(side="left", padx=(0, 14))
         ttk.Label(ajustes, text="FPS").pack(side="left", padx=(0, 5))
@@ -218,10 +220,10 @@ class _Panel:
             return
         if self.busqueda is not None:
             self._cancelar_busqueda()
-            self.estado.set("Búsqueda cancelada.")
+            self.estado.set("Search canceled.")
         else:
             self.busqueda = _Busqueda()
-            self.estado.set("Buscando cámaras en la red local…")
+            self.estado.set("Searching for cameras on the local network…")
             threading.Thread(target=_buscar_en_red, args=(self.busqueda,), daemon=True).start()
         self._actualizar_controles()
 
@@ -239,7 +241,7 @@ class _Panel:
             return
         self.busqueda = None
         if camaras is None:
-            self.estado.set("No se pudo buscar en la red. Puedes indicar la IPv4 y el puerto.")
+            self.estado.set("Network search failed. Enter the host's IPv4 address and port.")
         else:
             self.camaras = camaras
             self.selector_camaras.configure(
@@ -247,8 +249,8 @@ class _Panel:
             )
             self.camara_elegida.set("")
             self.estado.set(
-                "Elige una cámara de la lista o escribe la IPv4 y el puerto."
-                if camaras else "No se encontraron cámaras. Puedes indicar la IPv4 y el puerto."
+                "Choose a camera from the list or enter the host's IPv4 address and port."
+                if camaras else "No cameras found. Enter the host's IPv4 address and port."
             )
         self._actualizar_controles()
 
@@ -267,7 +269,7 @@ class _Panel:
         except ValueError:
             puerto = 0
         if not 1 <= puerto <= 65_535:
-            raise ValueError("Escribe un puerto entre 1 y 65535.")
+            raise ValueError("Enter a port number between 1 and 65535.")
         return ip, puerto
 
     def _olvidar_identidad(self) -> None:
@@ -279,9 +281,9 @@ class _Panel:
             self.estado.set(str(error))
             return
         if not messagebox.askyesno(
-            "Olvidar identidad",
-            f"¿Quieres olvidar la identidad guardada para {ip}:{puerto}? "
-            "Comprueba que corresponde al equipo de la cámara antes de volver a conectar.",
+            "Forget identity",
+            f"Forget the saved identity for {ip}:{puerto}? "
+            "Verify that this is the camera's address before reconnecting.",
             parent=self.raiz,
             default="no",
         ):
@@ -290,10 +292,12 @@ class _Panel:
         self._cancelar_busqueda()
         try:
             Visor.olvidar(ip, puerto)
-        except (ErrorConexion, OSError) as error:
+        except ErrorConexion as error:
             self.estado.set(str(error))
+        except OSError:
+            self.estado.set("Could not forget the saved camera identity.")
         else:
-            self.estado.set("Identidad olvidada. Puedes volver a solicitar la conexión.")
+            self.estado.set("Camera identity forgotten. You can request access again.")
         self._actualizar_controles()
 
     def _solicitar_desde_teclado(self, _evento) -> str:
@@ -315,13 +319,13 @@ class _Panel:
         self.pausa_solicitada = False
         sesion = _Sesion(visor, self._ajustes())
         self.sesion = sesion
-        self.estado.set("Solicitud en curso. Esperando la aprobación del anfitrión.")
-        self._mostrar_mensaje("Esperando aprobación")
+        self.estado.set("Access requested. Waiting for the host to approve.")
+        self._mostrar_mensaje("Waiting for approval")
         self._actualizar_controles()
         threading.Thread(target=_recibir, args=(sesion,), daemon=True).start()
 
     def _ajustes(self) -> _Ajustes:
-        return _Ajustes(self.pausa_solicitada, self.calidad.get(), int(self.fps.get()))
+        return _Ajustes(self.pausa_solicitada, _VALORES_CALIDAD[self.calidad.get()], int(self.fps.get()))
 
     def _actualizar_ajustes(self, _evento=None) -> None:
         if self.sesion is not None and self.aprobada:
@@ -334,27 +338,27 @@ class _Panel:
         self._actualizar_ajustes()
         self._actualizar_controles()
         if self.pausa_solicitada:
-            self.estado.set("Solicitando pausa")
-            self._mostrar_mensaje("Esperando confirmación de la pausa")
+            self.estado.set("Requesting a pause")
+            self._mostrar_mensaje("Waiting for the host to pause")
 
     def _actualizar_controles(self) -> None:
         conectando = self.sesion is not None
         buscando = self.busqueda is not None
         for control in (self.entrada_host, self.entrada_puerto, self.conectar, self.olvidar, self.boton_buscar):
             control.configure(state="disabled" if conectando else "normal")
-        self.boton_buscar.configure(text="Cancelar búsqueda" if buscando else "Buscar cámaras")
+        self.boton_buscar.configure(text="Cancel search" if buscando else "Find cameras")
         self.selector_camaras.configure(
             state="readonly" if self.camaras and not conectando and not buscando else "disabled",
         )
         self.desconectar.configure(state="normal" if conectando else "disabled")
         self.boton_pausa.configure(
             state="normal" if self.aprobada else "disabled",
-            text="Solicitar reanudar" if self.pausa_solicitada else "Solicitar pausa",
+            text="Request resume" if self.pausa_solicitada else "Request pause",
         )
         for control in (self.selector_calidad, self.selector_fps):
             control.configure(state="readonly" if self.aprobada else "disabled")
 
-    def _detener(self, mensaje: str = "Desconectado") -> None:
+    def _detener(self, mensaje: str = "Disconnected") -> None:
         sesion = self.sesion
         self.sesion = None
         self.aprobada = False
@@ -363,9 +367,9 @@ class _Panel:
             sesion.cancelada.set()
             sesion.visor.cerrar()
         self.estado.set(mensaje)
-        self.efectivos.set("Ajustes efectivos · —")
+        self.efectivos.set("Applied settings · —")
         self.aviso_ajustes.set("")
-        self._mostrar_mensaje("Conéctate para ver la imagen en directo")
+        self._mostrar_mensaje("Connect to view live video")
         self._actualizar_controles()
 
     def _actualizar(self) -> None:
@@ -381,8 +385,8 @@ class _Panel:
                     self._detener(mensaje)
                     break
                 self.aprobada = True
-                self.estado.set("Conexión aprobada")
-                self._mostrar_mensaje("Esperando la primera imagen")
+                self.estado.set("Connection approved")
+                self._mostrar_mensaje("Waiting for the first frame")
                 self._actualizar_controles()
 
             if self.sesion is sesion and self.aprobada:
@@ -392,8 +396,8 @@ class _Panel:
                 if ultimo is not None:
                     self._mostrar_resultado(*ultimo)
                 if self.imagen is not None and time.monotonic() - self.hora_imagen > _SEGUNDOS_SIN_IMAGEN:
-                    self.estado.set("Conexión aprobada, sin imágenes recientes")
-                    self._mostrar_mensaje("No hay imágenes recientes")
+                    self.estado.set("Connection approved, no recent frames")
+                    self._mostrar_mensaje("No recent frames")
 
         self.raiz.after(45, self._actualizar)
 
@@ -406,21 +410,22 @@ class _Panel:
         pausada = efectivos.get("pausa", False)
         calidad = efectivos.get("calidad", "—")
         fps = efectivos.get("fps", "—")
-        self.efectivos.set(f"Ajustes efectivos · Calidad {calidad} · {fps} FPS")
+        etiqueta_calidad = _ETIQUETAS_CALIDAD.get(calidad, "—")
+        self.efectivos.set(f"Applied settings · {etiqueta_calidad} quality · {fps} FPS")
         if solicitud == self._ajustes():
             distintos = (pausada, calidad, fps) != (solicitud.pausa, solicitud.calidad, solicitud.fps)
-            self.aviso_ajustes.set("El anfitrión aplica ajustes distintos a los solicitados." if distintos else "")
+            self.aviso_ajustes.set("The host is using different settings than requested." if distintos else "")
         if pausada:
-            self.estado.set("Transmisión en pausa")
-            self._mostrar_mensaje("Transmisión en pausa")
+            self.estado.set("Stream paused")
+            self._mostrar_mensaje("Stream paused")
         elif imagen is not None and time.monotonic() - recibida <= _SEGUNDOS_SIN_IMAGEN:
-            self.estado.set("En directo")
+            self.estado.set("Live")
             self.imagen = imagen
             self.hora_imagen = recibida
             self._ajustar_lienzo()
         else:
-            self.estado.set("Conexión aprobada, esperando imagen")
-            self._mostrar_mensaje("Esperando una imagen reciente")
+            self.estado.set("Connection approved, waiting for video")
+            self._mostrar_mensaje("Waiting for a recent frame")
 
     def _mostrar_mensaje(self, texto: str) -> None:
         self.imagen = None

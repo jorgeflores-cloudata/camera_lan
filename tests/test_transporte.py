@@ -80,7 +80,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
                 self.assertTrue(pendiente.wait(5))
                 self.assertFalse(conexion.done())
                 servidor.publicar(jpeg)
-                with self.assertRaisesRegex(transporte.ErrorConexion, "aún no autorizó"):
+                with self.assertRaisesRegex(transporte.ErrorConexion, "has not yet approved"):
                     visor.leer(False, "alta", 12)
                 self.assertFalse(transporte._ruta_huella("127.0.0.1", puerto).exists())
                 control.assert_not_called()
@@ -134,7 +134,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
     def test_rechazo_del_anfitrion_impide_la_sesion(self):
         servidor, puerto, solicitud, control, _ = self._crear_servidor(aceptar=False)
         visor = self._crear_visor(puerto)
-        with self.assertRaisesRegex(transporte.ErrorConexion, "no aprobó"):
+        with self.assertRaisesRegex(transporte.ErrorConexion, "did not approve"):
             visor.conectar()
         self._esperar_desocupado(servidor)
         solicitud.assert_called_once()
@@ -176,7 +176,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
 
         (self.datos / "identidad.pem").unlink()
         servidor, _, solicitud, _, _ = self._crear_servidor(puerto=puerto)
-        with self.assertRaisesRegex(transporte.ErrorConexion, "identidad de la cámara cambió"):
+        with self.assertRaisesRegex(transporte.ErrorConexion, "identity has changed.*Forget identity"):
             self._crear_visor(puerto).conectar()
         self._esperar_desocupado(servidor)
         solicitud.assert_not_called()
@@ -192,7 +192,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
         servidor, puerto, solicitud, _, _ = self._crear_servidor(aceptar=False)
         for _ in range(5):
             visor = self._crear_visor(puerto)
-            with self.assertRaisesRegex(transporte.ErrorConexion, "no aprobó"):
+            with self.assertRaisesRegex(transporte.ErrorConexion, "did not approve"):
                 visor.conectar()
             self._esperar_desocupado(servidor)
 

@@ -29,6 +29,7 @@ _CALIDADES = {
     "media": (640, 360, 70),
     "alta": (960, 540, 82),
 }
+_ETIQUETAS_CALIDAD = {"Low": "baja", "Medium": "media", "High": "alta"}
 _TIEMPO_APROBACION = 30
 
 
@@ -166,7 +167,7 @@ class _Captura:
             if self._detener.is_set():
                 return
             if not camara.isOpened():
-                self.error = "Windows no pudo abrir esa cámara. Revisa el dispositivo y sus permisos."
+                self.error = "Windows could not open the camera. Check the device and its permissions."
                 return
 
             camara.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
@@ -180,7 +181,7 @@ class _Captura:
                 if self._detener.is_set():
                     return
                 if not ok or imagen is None:
-                    self.error = "La cámara dejó de entregar imágenes."
+                    self.error = "The camera stopped delivering frames."
                     return
 
                 ancho, alto, nivel = _CALIDADES[calidad]
@@ -194,13 +195,13 @@ class _Captura:
 
                 ok, jpeg = cv2.imencode(".jpg", imagen, [cv2.IMWRITE_JPEG_QUALITY, nivel])
                 if not ok:
-                    self.error = "No se pudo preparar la imagen de la cámara."
+                    self.error = "Could not prepare the camera image."
                     return
                 with self._lock:
                     self._ultimo = jpeg.tobytes()
                 self._detener.wait(max(0, 1 / fps - (time.monotonic() - inicio)))
         except (cv2.error, OSError):
-            self.error = "La cámara no está disponible."
+            self.error = "The camera is unavailable."
         finally:
             if camara is not None:
                 camara.release()
@@ -221,6 +222,7 @@ class _Anfitrion:
         self.cancelacion_activa: threading.Event | None = None
         self.en_vivo = False
         self.salir = False
+        self._minimizada_en_bandeja = False
         self.calidad_actual = "media"
         self.calidad_maxima = "media"
         self.fps_actual = 10
@@ -230,6 +232,7 @@ class _Anfitrion:
         self.permite_control = False
         self.indice_camara = 0
         self.foto: ImageTk.PhotoImage | None = None
+        self.fotograma_recibido = False
         self.ultima_comprobacion = 0.0
         self.limite_fotograma: float | None = None
 
@@ -237,10 +240,10 @@ class _Anfitrion:
         self.ip = tk.StringVar(value=direcciones[0] if len(direcciones) == 1 else "")
         self.puerto = tk.StringVar(value="8443")
         self.camara = tk.StringVar(value="0")
-        self.calidad = tk.StringVar(value=self.calidad_maxima)
+        self.calidad = tk.StringVar(value="Medium")
         self.fps = tk.StringVar(value=str(self.fps_maximos))
         self.ajustes_remotos = tk.BooleanVar(value=False)
-        self.estado = tk.StringVar(value="Cámara apagada")
+        self.estado = tk.StringVar(value="Camera off")
         self.texto_solicitud = tk.StringVar(value="")
 
         self._construir(direcciones)
@@ -250,7 +253,7 @@ class _Anfitrion:
         raiz.after(35, self._bucle)
 
     def _construir(self, direcciones: list[str]) -> None:
-        self.raiz.title(f"Cámara LAN · Compartir · v{__version__}")
+        self.raiz.title(f"LAN Camera · Share · v{__version__}")
         self.raiz.minsize(660, 670)
         self.raiz.geometry("720x750")
         self.raiz.configure(background="#f0f4fa")
@@ -263,7 +266,7 @@ class _Anfitrion:
 
         panel = ttk.Frame(self.raiz, padding=22, style="Host.TFrame")
         panel.pack(fill="both", expand=True)
-        ttk.Label(panel, text="Compartir cámara", style="Titulo.Host.TLabel").pack(anchor="w")
+        ttk.Label(panel, text="Share camera", style="Titulo.Host.TLabel").pack(anchor="w")
         self.indicador = tk.Label(
             panel, textvariable=self.estado, anchor="w", padx=10, pady=8,
             background="#e0e8f5", foreground="#1a2940", font=("Segoe UI", 11, "bold"),
@@ -282,17 +285,17 @@ class _Anfitrion:
             return control
 
         self.campos = [
-            (campo(0, "IPv4 de este equipo", ttk.Combobox(ajustes, textvariable=self.ip, values=direcciones)), "normal"),
-            (campo(1, "Puerto", ttk.Entry(ajustes, textvariable=self.puerto)), "normal"),
-            (campo(2, "Índice de cámara", ttk.Spinbox(ajustes, textvariable=self.camara, from_=0, to=15)), "normal"),
-            (campo(3, "Calidad máxima", ttk.Combobox(
-                ajustes, textvariable=self.calidad, values=tuple(_CALIDADES), state="readonly",
+            (campo(0, "This device's IPv4 address", ttk.Combobox(ajustes, textvariable=self.ip, values=direcciones)), "normal"),
+            (campo(1, "Port", ttk.Entry(ajustes, textvariable=self.puerto)), "normal"),
+            (campo(2, "Camera index", ttk.Spinbox(ajustes, textvariable=self.camara, from_=0, to=15)), "normal"),
+            (campo(3, "Maximum quality", ttk.Combobox(
+                ajustes, textvariable=self.calidad, values=tuple(_ETIQUETAS_CALIDAD), state="readonly",
             )), "readonly"),
-            (campo(4, "Imágenes por segundo (máximo)", ttk.Spinbox(ajustes, textvariable=self.fps, from_=1, to=15)), "normal"),
+            (campo(4, "Maximum frame rate (FPS)", ttk.Spinbox(ajustes, textvariable=self.fps, from_=1, to=15)), "normal"),
         ]
         control = ttk.Checkbutton(
             ajustes, variable=self.ajustes_remotos, style="Host.TCheckbutton",
-            text="Permitir al visor cambiar pausa, calidad y velocidad",
+            text="Allow the viewer to pause and adjust quality and frame rate",
         )
         control.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
         self.campos.append((control, "normal"))
@@ -304,23 +307,23 @@ class _Anfitrion:
         ).pack(anchor="w")
         acciones = ttk.Frame(self.panel_solicitud, style="Host.TFrame")
         acciones.pack(anchor="w", pady=(4, 0))
-        ttk.Button(acciones, text="Aceptar y compartir", command=lambda: self._responder(True)).pack(side="left")
-        ttk.Button(acciones, text="Rechazar", command=lambda: self._responder(False)).pack(side="left", padx=5)
+        ttk.Button(acciones, text="Accept and share", command=lambda: self._responder(True)).pack(side="left")
+        ttk.Button(acciones, text="Decline", command=lambda: self._responder(False)).pack(side="left", padx=5)
 
         botones = ttk.Frame(panel, style="Host.TFrame")
         botones.pack(fill="x", pady=(10, 8))
-        self.habilitar = ttk.Button(botones, text="Habilitar conexión", command=self._habilitar)
+        self.habilitar = ttk.Button(botones, text="Enable connection", command=self._habilitar)
         self.habilitar.pack(side="left")
-        self.pausar = ttk.Button(botones, text="Pausar cámara", command=self._alternar_pausa, state="disabled")
+        self.pausar = ttk.Button(botones, text="Pause camera", command=self._alternar_pausa, state="disabled")
         self.pausar.pack(side="left", padx=6)
-        self.detener = ttk.Button(botones, text="Cerrar conexión", command=self._cerrar_conexion, state="disabled")
+        self.detener = ttk.Button(botones, text="Close connection", command=self._cerrar_conexion, state="disabled")
         self.detener.pack(side="left")
-        ttk.Button(botones, text="Minimizar a la bandeja", command=self._ocultar).pack(side="right")
+        ttk.Button(botones, text="Minimize to tray", command=self._minimizar_a_bandeja).pack(side="right")
 
         self.area_previa = tk.Frame(panel, bg="#203047")
         self.area_previa.pack(fill="both", expand=True)
         self.previa = tk.Label(
-            self.area_previa, text="Vista previa · cámara apagada",
+            self.area_previa, text="Preview · camera off",
             bg="#203047", fg="white", font=("Segoe UI", 11),
         )
         self.previa.place(relx=.5, rely=.5, anchor="center")
@@ -329,20 +332,18 @@ class _Anfitrion:
         if self.servidor is not None:
             return
         if not self._puede_compartir():
-            messagebox.showerror("Cámara LAN", "Abre esta ventana desde el escritorio local desbloqueado.")
+            messagebox.showerror("LAN Camera", "Open this window from the unlocked local desktop.")
             return
         try:
             ip = str(ipaddress.IPv4Address(self.ip.get().strip()))
             puerto = int(self.puerto.get())
             self.indice_camara = int(self.camara.get())
             self.fps_maximos = int(self.fps.get())
-            self.calidad_maxima = self.calidad.get()
+            self.calidad_maxima = _ETIQUETAS_CALIDAD[self.calidad.get()]
             if not (1 <= puerto <= 65535 and 0 <= self.indice_camara <= 15 and 1 <= self.fps_maximos <= 15):
                 raise ValueError
-            if self.calidad_maxima not in _CALIDADES:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Cámara LAN", "Revisa la IPv4, el puerto, el índice de cámara y el límite de imágenes.")
+        except (ValueError, KeyError):
+            messagebox.showerror("LAN Camera", "Check the IPv4 address, port, camera index, quality, and frame rate.")
             return
 
         self.permite_control = self.ajustes_remotos.get()
@@ -356,17 +357,21 @@ class _Anfitrion:
                 lambda: self.eventos.put(("terminar", generacion, None)),
             )
             servidor.iniciar()
-        except (ErrorConexion, OSError) as error:
-            mensaje = str(error)
-            if isinstance(error, OSError) and (
-                error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) == 10048
-            ):
+        except ErrorConexion as error:
+            messagebox.showerror("LAN Camera", str(error))
+            return
+        except OSError as error:
+            codigo_error = getattr(error, "winerror", None) or error.errno
+            if error.errno == errno.EADDRINUSE or codigo_error == 10048:
                 mensaje = (
-                    f"El puerto {puerto} ya está en uso. Si hay otra versión de Cámara LAN abierta, "
-                    "elige Salir en su icono junto al reloj. También puedes indicar otro puerto "
-                    "en Compartir y en Ver."
+                    f"Port {puerto} is already in use. If another version of LAN Camera is open, "
+                    "choose Exit from its tray icon. You can also use a different port on both devices."
                 )
-            messagebox.showerror("Cámara LAN", mensaje)
+            else:
+                mensaje = f"Could not listen on port {puerto}."
+                if codigo_error is not None:
+                    mensaje += f" System error {codigo_error}."
+            messagebox.showerror("LAN Camera", mensaje)
             return
 
         self.servidor = servidor
@@ -387,20 +392,21 @@ class _Anfitrion:
 
     def _mostrar_espera(self) -> None:
         if self.solicitud is not None:
-            conexion = "Solicitud pendiente"
+            conexion = "Request pending"
         elif self.anuncio is None:
-            conexion = "Esperando solicitud por IP y puerto"
+            conexion = "Waiting for a request by IP address and port"
         else:
-            conexion = "Disponible en la LAN"
+            conexion = "Available on the LAN"
 
-        if self.foto is not None:
-            self._estado(f"{conexion} · vista previa local", True)
+        if self.fotograma_recibido:
+            actividad = "camera on" if self._minimizada_en_bandeja else "local preview"
+            self._estado(f"{conexion} · {actividad}", True)
         elif self.captura is not None:
-            self._estado(f"{conexion} · abriendo cámara", True)
+            self._estado(f"{conexion} · opening camera", True)
         elif self.pausa_local:
-            self._estado(f"{conexion} · cámara en pausa")
+            self._estado(f"{conexion} · camera paused")
         else:
-            self._estado(f"{conexion} · cámara apagada")
+            self._estado(f"{conexion} · camera off")
 
     def _solicitar(self, generacion: int, ip: str, cancelada: threading.Event) -> bool:
         solicitud = _Solicitud(ip, cancelada, time.monotonic() + _TIEMPO_APROBACION)
@@ -414,7 +420,7 @@ class _Anfitrion:
         solicitud = _Control(pausa, calidad, fps, time.monotonic() + 2)
         self.eventos.put(("control", generacion, solicitud))
         if not solicitud.respondido.wait(2) or solicitud.respuesta is None:
-            raise ErrorConexion("El equipo que comparte no pudo aplicar los ajustes.")
+            raise ErrorConexion("The host could not apply the requested settings.")
         return solicitud.respuesta
 
     def _mostrar_solicitud(self, solicitud: _Solicitud) -> None:
@@ -426,7 +432,7 @@ class _Anfitrion:
             return
 
         self.solicitud = solicitud
-        self.texto_solicitud.set(f"El dispositivo {solicitud.ip} pide ver la cámara.")
+        self.texto_solicitud.set(f"Device {solicitud.ip} is requesting to view the camera.")
         self.panel_solicitud.pack(fill="x", before=self.pausar.master)
         self._mostrar_espera()
         if self._ventana_visible():
@@ -448,9 +454,9 @@ class _Anfitrion:
             self.calidad_actual = self.calidad_maxima
             self.fps_actual = self.fps_maximos
             if self.pausa_local:
-                self._estado("Sesión en pausa · cámara apagada")
+                self._estado("Session paused · camera off")
             else:
-                self._estado("Sesión aprobada · iniciando transmisión", True)
+                self._estado("Session approved · starting stream", True)
         elif self.servidor is not None:
             self._mostrar_espera()
         solicitud.respondida.set()
@@ -460,8 +466,8 @@ class _Anfitrion:
         if not self.autorizada or time.monotonic() >= solicitud.vence:
             solicitud.respondido.set()
             return
-        if not self._puede_compartir():
-            self._dejar_de_compartir("La sesión se cerró al perder el escritorio local")
+        if not self._puede_capturar():
+            self._dejar_de_compartir("Session ended when the local desktop became unavailable")
             solicitud.respondido.set()
             return
 
@@ -496,23 +502,23 @@ class _Anfitrion:
             if self.captura is not None:
                 self._detener_captura()
             if self.autorizada:
-                self._estado("Sesión en pausa · cámara apagada")
+                self._estado("Session paused · camera off")
             else:
                 self._mostrar_espera()
         elif self.captura is not None:
             self.captura.ajustar(self.calidad_actual, self.fps_actual)
         elif self.captura_cerrando is None or not self.captura_cerrando.viva():
-            if not self._puede_compartir():
-                self._suspender_captura("Escritorio local no disponible · cámara apagada")
+            if not self._puede_capturar():
+                self._suspender_captura("Local desktop unavailable · camera off")
                 return
             if self.autorizada and (self.cancelacion_activa is None or self.cancelacion_activa.is_set()):
-                self._dejar_de_compartir("Sesión cerrada · cámara apagada")
+                self._dejar_de_compartir("Session ended · camera off")
                 return
             self.captura_cerrando = None
             self.captura = _Captura(self.indice_camara, self.calidad_actual, self.fps_actual)
             self.limite_fotograma = time.monotonic() + 10
             if self.autorizada:
-                self._estado("Abriendo cámara para la sesión aprobada", True)
+                self._estado("Opening camera for the approved session", True)
             else:
                 self._mostrar_espera()
 
@@ -525,18 +531,19 @@ class _Anfitrion:
             self.servidor.publicar(None)
         self.limite_fotograma = None
         self.foto = None
-        self.previa.configure(image="", text="Vista previa · cámara apagada")
+        self.fotograma_recibido = False
+        self.previa.configure(image="", text="Preview · camera off")
 
     def _sesion_terminada(self) -> None:
         if self.autorizada:
-            self._dejar_de_compartir("El visor se desconectó · cámara apagada")
+            self._dejar_de_compartir("Viewer disconnected · camera off")
         else:
             self._responder(False)
 
     def _cerrar_conexion(self) -> None:
-        self._dejar_de_compartir(f"Conexión cerrada · puerto {self.puerto.get()} liberado")
+        self._dejar_de_compartir(f"Connection closed · port {self.puerto.get()} released")
 
-    def _dejar_de_compartir(self, estado: str = "Cámara apagada") -> None:
+    def _dejar_de_compartir(self, estado: str = "Camera off") -> None:
         self.generacion += 1
         anuncio, self.anuncio = self.anuncio, None
         if anuncio is not None:
@@ -566,7 +573,7 @@ class _Anfitrion:
         if self.bandeja is not None:
             if self.en_vivo != activo:
                 self.bandeja.icon = _icono(activo)
-            self.bandeja.title = f"Cámara LAN · {texto}"
+            self.bandeja.title = f"LAN Camera · {texto}"
         self.en_vivo = activo
 
     def _botones(self) -> None:
@@ -577,21 +584,24 @@ class _Anfitrion:
         self.detener.configure(state="normal" if preparado else "disabled")
         self.pausar.configure(
             state="normal" if preparado else "disabled",
-            text="Reanudar cámara" if self.pausa_local else "Pausar cámara",
+            text="Resume camera" if self.pausa_local else "Pause camera",
         )
 
     def _puede_compartir(self) -> bool:
         return self._ventana_visible() and _escritorio_disponible()
+
+    def _puede_capturar(self) -> bool:
+        return (self._minimizada_en_bandeja or self._ventana_visible()) and _escritorio_disponible()
 
     def _ventana_visible(self) -> bool:
         return self.raiz.state() in ("normal", "zoomed")
 
     def _al_ocultar(self, evento) -> None:
         if evento.widget is self.raiz and self.raiz.state() == "iconic":
-            self._ocultar()
+            self._minimizar_a_bandeja()
 
     def _suspender_si_oculta(self) -> None:
-        self._suspender_captura("Ventana oculta · cámara apagada")
+        self._suspender_captura("Window closed · camera off")
 
     def _suspender_captura(self, estado: str) -> None:
         if self.servidor is None:
@@ -600,8 +610,7 @@ class _Anfitrion:
             self._dejar_de_compartir(estado)
             return
 
-        # Una solicitud remota puede volver a mostrar la ventana. Solo un
-        # clic local en Reanudar cámara puede reactivar la vista previa.
+        # Keep the camera paused until the local user resumes it.
         if not self.pausa_local:
             self.pausa_local = True
             self._detener_captura()
@@ -611,11 +620,19 @@ class _Anfitrion:
         self._mostrar_espera()
 
     def _ocultar(self) -> None:
+        self._minimizada_en_bandeja = False
         self._suspender_si_oculta()
         self.raiz.withdraw()
 
+    def _minimizar_a_bandeja(self) -> None:
+        self._minimizada_en_bandeja = True
+        self.raiz.withdraw()
+        if self.servidor is not None and not self.autorizada:
+            self._mostrar_espera()
+
     def _abrir(self) -> None:
         self.raiz.deiconify()
+        self._minimizada_en_bandeja = False
         self.raiz.lift()
 
     def _salir(self) -> None:
@@ -628,11 +645,11 @@ class _Anfitrion:
     def _mostrar_fotograma(self) -> None:
         if self.servidor is None or self.captura is None:
             return
-        if not self._puede_compartir():
-            self._suspender_captura("Escritorio local no disponible · cámara apagada")
+        if not self._puede_capturar():
+            self._suspender_captura("Local desktop unavailable · camera off")
             return
         if self.autorizada and (self.cancelacion_activa is None or self.cancelacion_activa.is_set()):
-            self._dejar_de_compartir("Sesión cerrada · cámara apagada")
+            self._dejar_de_compartir("Session ended · camera off")
             return
         if self.captura.error:
             self._dejar_de_compartir(self.captura.error)
@@ -641,18 +658,20 @@ class _Anfitrion:
         jpeg = self.captura.tomar_fotograma()
         if jpeg is None:
             if self.limite_fotograma is not None and time.monotonic() >= self.limite_fotograma:
-                self._dejar_de_compartir("La cámara no respondió a tiempo.")
+                self._dejar_de_compartir("The camera did not respond in time.")
             return
 
         self.limite_fotograma = time.monotonic() + 10
-        with Image.open(BytesIO(jpeg)) as cuadro:
-            espacio = (max(1, self.area_previa.winfo_width() - 8), max(1, self.area_previa.winfo_height() - 8))
-            cuadro.thumbnail(espacio, Image.Resampling.BILINEAR)
-            self.foto = ImageTk.PhotoImage(cuadro)
-        self.previa.configure(image=self.foto, text="")
+        self.fotograma_recibido = True
+        if self._ventana_visible():
+            with Image.open(BytesIO(jpeg)) as cuadro:
+                espacio = (max(1, self.area_previa.winfo_width() - 8), max(1, self.area_previa.winfo_height() - 8))
+                cuadro.thumbnail(espacio, Image.Resampling.BILINEAR)
+                self.foto = ImageTk.PhotoImage(cuadro)
+            self.previa.configure(image=self.foto, text="")
         if self.autorizada:
             self.servidor.publicar(jpeg)
-            self._estado("Compartiendo cámara en vivo", True)
+            self._estado("Sharing live video", True)
         else:
             self._mostrar_espera()
 
@@ -686,8 +705,10 @@ class _Anfitrion:
         if self.servidor is not None and ahora - self.ultima_comprobacion >= .35:
             self.ultima_comprobacion = ahora
             if not _escritorio_disponible():
-                self._suspender_captura("Escritorio bloqueado · cámara apagada")
-            elif not self._ventana_visible() and (self.autorizada or not self.pausa_local):
+                self._suspender_captura("Desktop locked · camera off")
+            elif not self._minimizada_en_bandeja and not self._ventana_visible() and (
+                self.autorizada or not self.pausa_local
+            ):
                 self._suspender_si_oculta()
 
         if self.solicitud is not None:
@@ -708,15 +729,15 @@ def ejecutar() -> None:
     raiz = tk.Tk()
     anfitrion = _Anfitrion(raiz)
     anfitrion.bandeja = pystray.Icon(
-        "CamaraLAN", _icono(False), "Cámara LAN · cámara apagada",
+        "CamaraLAN", _icono(False), "LAN Camera · camera off",
         pystray.Menu(
-            pystray.MenuItem("Abrir", lambda *_: anfitrion.eventos.put(("abrir", None, None)), default=True),
+            pystray.MenuItem("Open", lambda *_: anfitrion.eventos.put(("abrir", None, None)), default=True),
             pystray.MenuItem(
-                "Cerrar conexión",
+                "Close connection",
                 lambda *_: anfitrion.eventos.put(("cerrar_conexion", anfitrion.generacion, None)),
                 enabled=lambda _: anfitrion.servidor is not None,
             ),
-            pystray.MenuItem("Salir", lambda *_: anfitrion.eventos.put(("salir", None, None))),
+            pystray.MenuItem("Exit", lambda *_: anfitrion.eventos.put(("salir", None, None))),
         ),
     )
     try:

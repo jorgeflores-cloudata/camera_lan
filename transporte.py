@@ -49,15 +49,15 @@ def _direccion(ip: str) -> str:
     try:
         direccion = ipaddress.IPv4Address(ip.strip())
     except (AttributeError, ValueError) as error:
-        raise ErrorConexion("Escribe una dirección IPv4 privada de la red local.") from error
+        raise ErrorConexion("Enter a private IPv4 address on the local network.") from error
     if not any(direccion in red for red in _REDES_LAN):
-        raise ErrorConexion("La dirección debe pertenecer a la red local privada.")
+        raise ErrorConexion("The address must be on the private local network.")
     return str(direccion)
 
 
 def _puerto(puerto: int) -> int:
     if type(puerto) is not int or not 1 <= puerto <= 65535:
-        raise ErrorConexion("Escribe un puerto entre 1 y 65535.")
+        raise ErrorConexion("Enter a port between 1 and 65535.")
     return puerto
 
 
@@ -115,7 +115,7 @@ def _tls_servidor() -> ssl.SSLContext:
             _guardar_nuevo(ruta, _generar_identidad())
         contexto.load_cert_chain(ruta)
     except OSError as error:
-        raise ErrorConexion("No se pudo cargar la identidad local de la cámara. Revisa su archivo y permisos.") from error
+        raise ErrorConexion("Could not load the local camera identity. Check its file and permissions.") from error
     return contexto
 
 
@@ -130,8 +130,8 @@ def _comprobar_huella(ruta: Path, huella: bytes) -> bool:
         return False
     if not hmac.compare_digest(fijada, huella):
         raise ErrorConexion(
-            "La identidad de la cámara cambió. Verifica el equipo anfitrión y, si es el correcto, "
-            "usa «Olvidar identidad» antes de volver a conectar."
+            "The camera's identity has changed. Verify the host computer, then use “Forget identity” "
+            "before reconnecting."
         )
     return True
 
@@ -139,7 +139,7 @@ def _comprobar_huella(ruta: Path, huella: bytes) -> bool:
 def _restante(vencimiento: float) -> float:
     resta = vencimiento - time.monotonic()
     if resta <= 0:
-        raise ErrorConexion("Venció el tiempo de espera de la conexión.")
+        raise ErrorConexion("The connection timed out.")
     return resta
 
 
@@ -150,7 +150,7 @@ def _recibir(conexion: socket.socket, cantidad: int, vencimiento: float) -> byte
         conexion.settimeout(_restante(vencimiento))
         leidos = conexion.recv_into(salida)
         if leidos == 0:
-            raise ErrorConexion("El otro equipo cerró la conexión.")
+            raise ErrorConexion("The other computer closed the connection.")
         salida = salida[leidos:]
     return bytes(datos)
 
@@ -158,7 +158,7 @@ def _recibir(conexion: socket.socket, cantidad: int, vencimiento: float) -> byte
 def _recibir_paquete(conexion: socket.socket, limite: int, vencimiento: float) -> bytes:
     cantidad, = _LONGITUD.unpack(_recibir(conexion, _LONGITUD.size, vencimiento))
     if cantidad > limite:
-        raise ErrorConexion("El otro equipo envió un paquete demasiado grande.")
+        raise ErrorConexion("The other computer sent a packet that was too large.")
     return _recibir(conexion, cantidad, vencimiento)
 
 
@@ -175,25 +175,25 @@ def _recibir_json(conexion: socket.socket, vencimiento: float) -> dict:
     try:
         mensaje = json.loads(datos.decode("utf-8"))
     except ValueError as error:
-        raise ErrorConexion("El otro equipo envió un mensaje de control inválido.") from error
+        raise ErrorConexion("The other computer sent an invalid control message.") from error
     if not isinstance(mensaje, dict):
-        raise ErrorConexion("El otro equipo envió un mensaje de control inválido.")
+        raise ErrorConexion("The other computer sent an invalid control message.")
     return mensaje
 
 
 def _enviar_json(conexion: socket.socket, mensaje: dict, vencimiento: float) -> None:
     datos = json.dumps(mensaje, separators=(",", ":")).encode("utf-8")
     if len(datos) > _MAX_CONTROL:
-        raise ErrorConexion("El mensaje de control es demasiado grande.")
+        raise ErrorConexion("The control message is too large.")
     _enviar_paquete(conexion, datos, vencimiento)
 
 
 def _control(mensaje: dict) -> _Control:
     if not isinstance(mensaje, dict) or set(mensaje) != {"pausa", "calidad", "fps"}:
-        raise ErrorConexion("Los controles de imagen no son válidos.")
+        raise ErrorConexion("The video settings are invalid.")
     pausa, calidad, fps = mensaje["pausa"], mensaje["calidad"], mensaje["fps"]
     if type(pausa) is not bool or calidad not in ("baja", "media", "alta") or type(fps) is not int or not 1 <= fps <= 15:
-        raise ErrorConexion("Los controles de imagen no son válidos.")
+        raise ErrorConexion("The video settings are invalid.")
     return {"pausa": pausa, "calidad": calidad, "fps": fps}
 
 
@@ -246,7 +246,7 @@ class Servidor:
     def iniciar(self) -> None:
         with self._bloqueo:
             if self._escucha is not None:
-                raise ErrorConexion("La cámara ya está escuchando en la red local.")
+                raise ErrorConexion("The camera is already listening on the local network.")
             contexto = _tls_servidor()
             self._intentos.clear()
             escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -435,7 +435,7 @@ class Visor:
     def conectar(self) -> None:
         with self._bloqueo:
             if self._cerrado or self._conexion is not None:
-                raise ErrorConexion("Crea una nueva conexión para abrir el visor.")
+                raise ErrorConexion("Start a new connection to open the viewer.")
             conexion = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._conexion = conexion
         try:
@@ -450,16 +450,16 @@ class Visor:
             contexto.set_alpn_protocols([_PROTOCOLO])
             with self._bloqueo:
                 if self._cerrado:
-                    raise ErrorConexion("Se canceló la conexión.")
+                    raise ErrorConexion("The connection was canceled.")
                 conexion = contexto.wrap_socket(conexion, do_handshake_on_connect=False)
                 self._conexion = conexion
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
             if conexion.selected_alpn_protocol() != _PROTOCOLO:
-                raise ErrorConexion("Actualiza ambos equipos a la misma versión de Cámara LAN.")
+                raise ErrorConexion("Update LAN Camera on both computers to a compatible version.")
             certificado = conexion.getpeercert(binary_form=True)
             if not certificado:
-                raise ErrorConexion("La cámara no presentó un certificado.")
+                raise ErrorConexion("The camera did not provide a certificate.")
             huella = hashlib.sha256(certificado).digest()
             ruta = _ruta_huella(self._ip, self._puerto)
             fijada = _comprobar_huella(ruta, huella)
@@ -470,16 +470,16 @@ class Visor:
                 or respuesta["tipo"] != "resultado"
                 or type(respuesta["autorizada"]) is not bool
             ):
-                raise ErrorConexion("La cámara envió una respuesta de conexión inválida.")
+                raise ErrorConexion("The camera sent an invalid connection response.")
             if not respuesta["autorizada"]:
-                raise ErrorConexion("La cámara no aprobó la solicitud.")
+                raise ErrorConexion("The host did not approve the request.")
             with self._bloqueo:
                 if self._cerrado:
-                    raise ErrorConexion("Se canceló la conexión.")
+                    raise ErrorConexion("The connection was canceled.")
                 if not fijada:
                     _guardar_nuevo(ruta, huella)
                     if not _comprobar_huella(ruta, huella):
-                        raise ErrorConexion("No se pudo guardar la identidad de la cámara.")
+                        raise ErrorConexion("Could not save the camera's identity.")
                 self._aprobado = True
         except (OSError, ErrorConexion):
             self.cerrar()
@@ -491,14 +491,14 @@ class Visor:
             with self._bloqueo:
                 conexion = self._conexion
                 if conexion is None or not self._aprobado:
-                    raise ErrorConexion("La cámara aún no autorizó esta conexión.")
+                    raise ErrorConexion("The host has not yet approved this connection.")
             try:
                 vencimiento = time.monotonic() + _LECTURA + 1
                 _enviar_json(conexion, control, vencimiento)
                 efectivo = _control(_recibir_json(conexion, vencimiento))
                 imagen = _recibir_paquete(conexion, _MAX_JPEG, vencimiento)
                 if imagen and (efectivo["pausa"] or not _es_jpeg(imagen)):
-                    raise ErrorConexion("La cámara envió una imagen inválida.")
+                    raise ErrorConexion("The camera sent an invalid image.")
                 return imagen or None, efectivo
             except (OSError, ErrorConexion):
                 self.cerrar()
