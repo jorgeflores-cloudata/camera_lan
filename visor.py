@@ -14,6 +14,7 @@ from tkinter import messagebox, ttk
 from PIL import Image, ImageTk
 
 from descubrimiento import CamaraLAN, buscar_camaras
+from historial import ErrorHistorial, leer_recientes, registrar_conexion
 from transporte import ErrorConexion, Visor
 from version import __version__
 
@@ -74,11 +75,19 @@ def _decodificar(jpeg: bytes) -> Image.Image:
         raise ErrorConexion("The host sent an image that could not be displayed.") from None
 
 
-def _recibir(sesion: _Sesion) -> None:
+def _recibir(
+    sesion: _Sesion,
+    destino: tuple[str, int],
+    resultados_recientes: queue.SimpleQueue[list[tuple[str, int]] | None],
+) -> None:
     try:
         sesion.visor.conectar()
         if not sesion.cancelada.is_set():
             sesion.eventos.put(("conectada", ""))
+            try:
+                resultados_recientes.put(registrar_conexion(*destino))
+            except ErrorHistorial:
+                resultados_recientes.put(None)
 
         while not sesion.cancelada.is_set():
             with sesion.bloqueo:
@@ -129,6 +138,8 @@ class _Panel:
         self.hora_imagen = 0.0
         self.busqueda: _Busqueda | None = None
         self.camaras: list[CamaraLAN] = []
+        self.recientes: list[tuple[str, int]] = []
+        self.resultados_recientes: queue.SimpleQueue[list[tuple[str, int]] | None] = queue.SimpleQueue()
 
         self.host = tk.StringVar()
         self.puerto = tk.StringVar(value="8443")
@@ -154,12 +165,19 @@ class _Panel:
         busqueda = ttk.Frame(panel)
         busqueda.pack(fill="x", pady=(0, 12))
         busqueda.columnconfigure(0, weight=1)
+        busqueda.columnconfigure(2, weight=1)
         ttk.Label(busqueda, text="Cameras on the local network").grid(row=0, column=0, sticky="w", pady=(0, 4))
         self.selector_camaras = ttk.Combobox(busqueda, textvariable=self.camara_elegida, state="disabled")
         self.selector_camaras.grid(row=1, column=0, sticky="ew", padx=(0, 8))
         self.selector_camaras.bind("<<ComboboxSelected>>", self._elegir_camara)
         self.boton_buscar = ttk.Button(busqueda, text="Find cameras", command=self._alternar_busqueda)
         self.boton_buscar.grid(row=1, column=1, sticky="ew")
+
+        self.etiqueta_recientes = ttk.Label(busqueda, text="Recent connections")
+        self.etiqueta_recientes.grid(row=0, column=2, sticky="w", padx=(14, 0), pady=(0, 4))
+        self.selector_recientes = ttk.Combobox(busqueda, state="disabled")
+        self.selector_recientes.grid(row=1, column=2, sticky="ew", padx=(14, 0))
+        self.selector_recientes.bind("<<ComboboxSelected>>", self._elegir_reciente)
 
         conexion = ttk.Frame(panel)
         conexion.pack(fill="x")
@@ -203,6 +221,10 @@ class _Panel:
         self.selector_fps.bind("<<ComboboxSelected>>", self._actualizar_ajustes)
         ttk.Label(panel, textvariable=self.efectivos).pack(anchor="w")
         ttk.Label(panel, textvariable=self.aviso_ajustes).pack(anchor="w")
+        try:
+            self._mostrar_recientes(leer_recientes())
+        except ErrorHistorial:
+            self._mostrar_recientes(None)
         self._actualizar_controles()
         self.entrada_host.focus_set()
         raiz.after(45, self._actualizar)
@@ -257,9 +279,29 @@ class _Panel:
         indice = self.selector_camaras.current()
         if 0 <= indice < len(self.camaras):
             camara = self.camaras[indice]
-            self.host.set(camara.ip)
-            self.puerto.set(str(camara.puerto))
-            self.conectar.focus_set()
+            self.selector_recientes.set("")
+            self._seleccionar_destino(camara.ip, camara.puerto)
+
+    def _mostrar_recientes(self, recientes: list[tuple[str, int]] | None) -> None:
+        if recientes is None:
+            self.etiqueta_recientes.configure(text="Recent connections unavailable")
+            return
+        self.etiqueta_recientes.configure(text="Recent connections")
+        if recientes != self.recientes:
+            self.recientes = recientes
+            self.selector_recientes.configure(values=tuple(f"{ip}:{puerto}" for ip, puerto in recientes))
+            self.selector_recientes.set("")
+
+    def _elegir_reciente(self, _evento) -> None:
+        indice = self.selector_recientes.current()
+        if 0 <= indice < len(self.recientes):
+            self.camara_elegida.set("")
+            self._seleccionar_destino(*self.recientes[indice])
+
+    def _seleccionar_destino(self, ip: str, puerto: int) -> None:
+        self.host.set(ip)
+        self.puerto.set(str(puerto))
+        self.conectar.focus_set()
 
     def _destino(self) -> tuple[str, int]:
         ip = _direccion(self.host.get())
@@ -321,7 +363,9 @@ class _Panel:
         self.estado.set(f"Connecting to {ip}:{puerto}…")
         self._mostrar_mensaje("Connecting…")
         self._actualizar_controles()
-        threading.Thread(target=_recibir, args=(sesion,), daemon=True).start()
+        threading.Thread(
+            target=_recibir, args=(sesion, (ip, puerto), self.resultados_recientes), daemon=True,
+        ).start()
 
     def _ajustes(self) -> _Ajustes:
         return _Ajustes(self.pausa_solicitada, _VALORES_CALIDAD[self.calidad.get()], int(self.fps.get()))
@@ -351,6 +395,7 @@ class _Panel:
         self.selector_camaras.configure(
             state="readonly" if self.camaras and not conectando and not buscando else "disabled",
         )
+        self.selector_recientes.configure(state="readonly" if self.recientes and not conectando else "disabled")
         self.desconectar.configure(state="normal" if conectando else "disabled")
         self.boton_pausa.configure(
             state="normal" if self.conectada else "disabled",
@@ -375,6 +420,13 @@ class _Panel:
 
     def _actualizar(self) -> None:
         self._actualizar_busqueda()
+        while True:
+            try:
+                recientes = self.resultados_recientes.get_nowait()
+            except queue.Empty:
+                break
+            self._mostrar_recientes(recientes)
+            self._actualizar_controles()
         sesion = self.sesion
         if sesion is not None:
             while True:

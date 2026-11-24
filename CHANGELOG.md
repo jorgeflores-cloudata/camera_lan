@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0 — 2026-11-24
+
+- The Viewer saves the ten most recent successful IP and port combinations. Choose a saved connection to fill in the address and port fields.
+- The first history list includes cameras with previously saved identities.
+- `Compartir.cmd`, `Ver.cmd`, and `Setup.cmd` are grouped in the `Launchers` folder.
+
 ## 1.3.1 — 2026-11-24
 
 - The PIN protects commands from the Windows tray. The launchers and window controls work directly.

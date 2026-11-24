@@ -1,3 +1,3 @@
 @echo off
-call "%~dp0Share.cmd" %*
+call "%~dp0..\Share.cmd" %*
 exit /b %errorlevel%

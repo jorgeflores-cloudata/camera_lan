@@ -92,7 +92,7 @@ def _ejecutar_modo(modo: str | None) -> int:
     except ImportError:
         messagebox.showerror(
             "LAN Camera",
-            "Some dependencies are missing. On Windows, run Setup.cmd first.",
+            r"Some dependencies are missing. On Windows, run Launchers\Setup.cmd first.",
         )
         return 1
 

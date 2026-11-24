@@ -1,3 +1,3 @@
 @echo off
-call "%~dp0View.cmd" %*
+call "%~dp0..\View.cmd" %*
 exit /b %errorlevel%

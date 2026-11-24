@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 if not exist ".venv\Scripts\pythonw.exe" (
-    echo Run Setup.cmd first.
+    echo Run Launchers\Setup.cmd first.
     echo Press any key to continue...
     pause >nul
     exit /b 1

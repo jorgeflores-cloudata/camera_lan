@@ -1,3 +1,3 @@
 @echo off
-call "%~dp0Setup.cmd" %*
+call "%~dp0Launchers\Setup.cmd" %*
 exit /b %errorlevel%
