@@ -1,0 +1,4 @@
+cryptography>=46,<51
+opencv-python-headless>=4.10,<5
+Pillow>=11.3,<13
+pystray==0.19.5
