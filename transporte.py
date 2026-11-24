@@ -21,6 +21,8 @@ import threading
 import time
 from typing import TypedDict
 
+from calidad import FPS_MAXIMOS, MAX_JPEG as _MAX_JPEG, PERFILES, limitar_calidad
+
 
 class ErrorConexion(Exception):
     """Error de configuración o del protocolo con un mensaje para la interfaz."""
@@ -33,11 +35,11 @@ class _Control(TypedDict):
 
 
 _REDES_LAN = tuple(ipaddress.IPv4Network(red) for red in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-_PROTOCOLO = "camara-lan/4"
+_PROTOCOLO = "camara-lan/5"
+_PROTOCOLO_CIERRE = "camara-lan/4"
 _PROTOCOLO_ANTERIOR = "camara-lan/3"
-_PROTOCOLOS = (_PROTOCOLO, _PROTOCOLO_ANTERIOR)
+_PROTOCOLOS = (_PROTOCOLO, _PROTOCOLO_CIERRE, _PROTOCOLO_ANTERIOR)
 _MAX_CONTROL = 1024
-_MAX_JPEG = 2 * 1024 * 1024
 _AUTENTICACION = 6
 _APROBACION = 30
 _LECTURA = 10
@@ -194,7 +196,10 @@ def _control(mensaje: dict) -> _Control:
     if not isinstance(mensaje, dict) or set(mensaje) != {"pausa", "calidad", "fps"}:
         raise ErrorConexion("The video settings are invalid.")
     pausa, calidad, fps = mensaje["pausa"], mensaje["calidad"], mensaje["fps"]
-    if type(pausa) is not bool or calidad not in ("baja", "media", "alta") or type(fps) is not int or not 1 <= fps <= 15:
+    if (
+        type(pausa) is not bool or type(calidad) is not str or calidad not in PERFILES
+        or type(fps) is not int or not 1 <= fps <= FPS_MAXIMOS
+    ):
         raise ErrorConexion("The video settings are invalid.")
     return {"pausa": pausa, "calidad": calidad, "fps": fps}
 
@@ -222,6 +227,8 @@ class _Sesion:
     cancelado: threading.Event = field(default_factory=threading.Event)
     autorizada: bool = False
     cierre_remoto: bool = False
+    calidad_maxima: str = "maxima"
+    fps_maximos: int = FPS_MAXIMOS
 
 
 class Servidor:
@@ -231,7 +238,7 @@ class Servidor:
         self,
         ip: str,
         puerto: int,
-        al_solicitar: Callable[[str, threading.Event], bool],
+        al_solicitar: Callable[[str, threading.Event, str, int], bool],
         al_control: Callable[[bool, str, int], dict],
         al_terminar: Callable[[], None],
         al_cerrar: Callable[[], None] | None = None,
@@ -350,11 +357,14 @@ class Servidor:
                 return
             if _recibir_json(conexion, vencimiento) != {"tipo": "conectar"}:
                 return
+            if protocolo != _PROTOCOLO:
+                sesion.calidad_maxima = "alta"
+                sesion.fps_maximos = 15
             solicitada = True
-            if not self._aprobar(conexion, sesion.cancelado, ip):
+            if not self._aprobar(conexion, sesion.cancelado, ip, sesion.calidad_maxima, sesion.fps_maximos):
                 if not sesion.cancelado.is_set():
                     respuesta = {"tipo": "resultado", "autorizada": False}
-                    if protocolo == _PROTOCOLO:
+                    if protocolo != _PROTOCOLO_ANTERIOR:
                         respuesta["cierre_remoto"] = False
                     _enviar_json(conexion, respuesta, time.monotonic() + 1)
                 return
@@ -363,9 +373,9 @@ class Servidor:
                     return
                 self._imagen = None
                 sesion.autorizada = True
-                sesion.cierre_remoto = protocolo == _PROTOCOLO and self._al_cerrar is not None
+                sesion.cierre_remoto = protocolo != _PROTOCOLO_ANTERIOR and self._al_cerrar is not None
             respuesta = {"tipo": "resultado", "autorizada": True}
-            if protocolo == _PROTOCOLO:
+            if protocolo != _PROTOCOLO_ANTERIOR:
                 respuesta["cierre_remoto"] = sesion.cierre_remoto
             _enviar_json(conexion, respuesta, time.monotonic() + 1)
             self._transmitir(sesion)
@@ -382,7 +392,10 @@ class Servidor:
                     self._imagen = None
                     self._sesion = None
 
-    def _aprobar(self, conexion: ssl.SSLSocket, cancelado: threading.Event, ip: str) -> bool:
+    def _aprobar(
+        self, conexion: ssl.SSLSocket, cancelado: threading.Event, ip: str,
+        calidad_maxima: str, fps_maximos: int,
+    ) -> bool:
         if cancelado.is_set():
             return False
         vencimiento = time.monotonic() + _APROBACION
@@ -405,7 +418,7 @@ class Servidor:
         vigilante = threading.Thread(target=vigilar, daemon=True, name="camara-lan-autorizacion")
         vigilante.start()
         try:
-            aprobada = self._al_solicitar(ip, cancelado)
+            aprobada = self._al_solicitar(ip, cancelado, calidad_maxima, fps_maximos)
         finally:
             finalizado.set()
             vigilante.join()
@@ -430,11 +443,15 @@ class Servidor:
                     return
                 continue
             solicitado = _control(mensaje)
+            solicitado["calidad"] = limitar_calidad(solicitado["calidad"], sesion.calidad_maxima)
+            solicitado["fps"] = min(solicitado["fps"], sesion.fps_maximos)
             demora = max(0.0, siguiente - time.monotonic())
             if sesion.cancelado.wait(demora) or time.monotonic() >= vencimiento_sesion:
                 return
             turno = time.monotonic()
             efectivo = _control(self._al_control(solicitado["pausa"], solicitado["calidad"], solicitado["fps"]))
+            efectivo["calidad"] = limitar_calidad(efectivo["calidad"], sesion.calidad_maxima)
+            efectivo["fps"] = min(efectivo["fps"], sesion.fps_maximos)
             with self._bloqueo:
                 imagen = None if efectivo["pausa"] else self._imagen
             _enviar_json(sesion.conexion, efectivo, vencimiento)
@@ -454,6 +471,8 @@ class Visor:
         self._cerrado = False
         self._aprobado = False
         self._cierre_remoto_disponible = False
+        self._calidad_maxima = "maxima"
+        self._fps_maximos = FPS_MAXIMOS
 
     @property
     def cierre_remoto_disponible(self) -> bool:
@@ -499,13 +518,13 @@ class Visor:
             _enviar_json(conexion, {"tipo": "conectar"}, vencimiento)
             respuesta = _recibir_json(conexion, time.monotonic() + _APROBACION + 2)
             campos = {"tipo", "autorizada"}
-            if protocolo == _PROTOCOLO:
+            if protocolo != _PROTOCOLO_ANTERIOR:
                 campos.add("cierre_remoto")
             if (
                 set(respuesta) != campos
                 or respuesta["tipo"] != "resultado"
                 or type(respuesta["autorizada"]) is not bool
-                or (protocolo == _PROTOCOLO and type(respuesta["cierre_remoto"]) is not bool)
+                or (protocolo != _PROTOCOLO_ANTERIOR and type(respuesta["cierre_remoto"]) is not bool)
             ):
                 raise ErrorConexion("The camera sent an invalid connection response.")
             if not respuesta["autorizada"]:
@@ -519,6 +538,8 @@ class Visor:
                         raise ErrorConexion("Could not save the camera's identity.")
                 self._aprobado = True
                 self._cierre_remoto_disponible = respuesta.get("cierre_remoto", False)
+                self._calidad_maxima = "maxima" if protocolo == _PROTOCOLO else "alta"
+                self._fps_maximos = FPS_MAXIMOS if protocolo == _PROTOCOLO else 15
         except (OSError, ErrorConexion):
             self.cerrar()
             raise
@@ -530,6 +551,8 @@ class Visor:
                 conexion = self._conexion
                 if conexion is None or not self._aprobado:
                     raise ErrorConexion("The connection is not ready for video.")
+                control["calidad"] = limitar_calidad(control["calidad"], self._calidad_maxima)
+                control["fps"] = min(control["fps"], self._fps_maximos)
             try:
                 vencimiento = time.monotonic() + _LECTURA + 1
                 _enviar_json(conexion, control, vencimiento)

@@ -15,6 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
+from calidad import ETIQUETAS, FPS_MAXIMOS, MAX_PIXELES
 from descubrimiento import CamaraLAN, buscar_camaras
 from grabacion import Grabacion
 from historial import ErrorHistorial, leer_recientes, registrar_conexion
@@ -27,11 +28,11 @@ _RED_LOCAL = tuple(
     ipaddress.IPv4Network(red)
     for red in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
-_ETIQUETAS_CALIDAD = {"baja": "Low", "media": "Medium", "alta": "High"}
+_ETIQUETAS_CALIDAD = ETIQUETAS
 _VALORES_CALIDAD = {etiqueta: valor for valor, etiqueta in _ETIQUETAS_CALIDAD.items()}
 _COLOR_FONDO = "#100c19"
 _COLOR_TEXTO = "#eee8f6"
-_MAXIMO_PIXELES = 4_194_304
+_MAXIMO_PIXELES = MAX_PIXELES
 _SEGUNDOS_SIN_IMAGEN = 5
 
 
@@ -113,7 +114,7 @@ def _recibir(
                 if not sesion.cancelada.is_set():
                     sesion.ultimo = (imagen, efectivos, time.monotonic(), ajustes)
             fps = efectivos.get("fps", ajustes.fps)
-            if type(fps) is not int or not 1 <= fps <= 15:
+            if type(fps) is not int or not 1 <= fps <= FPS_MAXIMOS:
                 fps = ajustes.fps
             if pausada:
                 fps = min(fps, 4)
@@ -255,7 +256,7 @@ class _Panel:
         self.selector_calidad.pack(side="left", padx=(0, 14))
         ttk.Label(ajustes, text="FPS").pack(side="left", padx=(0, 5))
         self.selector_fps = ttk.Combobox(
-            ajustes, textvariable=self.fps, values=tuple(str(valor) for valor in range(1, 16)), width=3
+            ajustes, textvariable=self.fps, values=tuple(str(valor) for valor in range(1, FPS_MAXIMOS + 1)), width=3
         )
         self.selector_fps.pack(side="left")
         self.selector_calidad.bind("<<ComboboxSelected>>", self._actualizar_ajustes)

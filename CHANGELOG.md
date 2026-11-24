@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.0 — 2026-11-24
+
+- Adds **Maximum** quality: up to 3840×2160 (4K), JPEG quality 95, and a selectable frame-rate limit up to 30 FPS.
+- Tries lower capture modes when 4K is unavailable, preserves the camera's aspect ratio, and never enlarges a lower-resolution image.
+- Retains the host's capture resolution when the Viewer lowers quality or pauses and resumes the stream. Discards frames encoded with outdated settings.
+- Supports larger 4K frames and 30 FPS MP4 recordings. Older clients remain limited to compatible High/15 FPS settings.
+
 ## 1.7.0 — 2026-11-24
 
 - **Close host app** in the Viewer exits LAN Camera on the host, even when minimized to the Windows tray. It is available for every active connection to an updated host, without an extra setting or PIN prompt.

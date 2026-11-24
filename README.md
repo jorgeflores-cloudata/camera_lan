@@ -1,6 +1,6 @@
 # LAN Camera
 
-Current version **1.7.0**. See the [changelog](CHANGELOG.md).
+Current version **1.8.0**. See the [changelog](CHANGELOG.md).
 
 Connect two devices to the same local network. Run **Share** on the Windows 11 device with the camera and **View** on the other device.
 
@@ -40,6 +40,21 @@ After the first connection, the viewer remembers the camera's identity for that 
 The host allows up to five connection attempts per minute. If you reach the limit, wait a minute before trying again.
 
 If the host cannot open the camera, go to **Settings → Privacy & security → Camera** and allow desktop apps to access it. Discovery uses IPv4 multicast over UDP port `55443`. If your network blocks multicast, connect using the host's IPv4 address and port. Guest networks may prevent devices from reaching each other.
+
+## Maximum quality on the LAN
+
+Before enabling sharing, choose **Maximum** under **Maximum quality** on the host and set the desired **Maximum frame rate (FPS)**, up to **30**. Maximum requests up to **3840×2160 (4K)** with JPEG quality 95. If the camera cannot provide that mode, the app tries lower resolutions and uses the available image without enlarging it. The actual frame rate depends on the camera, encoding speed, and network.
+
+The Viewer also offers **Maximum** and up to **30 FPS**. Enable viewer controls on the host if you want the Viewer to change these settings. The host's limits always apply.
+
+| Quality | Image bounds | JPEG quality |
+| --- | --- | --- |
+| Low | 426×240 | 55 |
+| Medium | 640×360 | 70 |
+| High | 960×540 | 82 |
+| Maximum | 3840×2160 | 95 |
+
+Update both devices for Maximum and 30 FPS. Connections to older versions retain High/15 FPS limits. MP4 recordings preserve the displayed resolution and framing at a 30 FPS output rate.
 
 ## Zoom in the Viewer
 

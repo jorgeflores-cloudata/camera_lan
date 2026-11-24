@@ -20,17 +20,13 @@ import cv2
 from PIL import Image, ImageDraw, ImageTk
 
 from acceso import Acceso
+from calidad import ETIQUETAS, FPS_MAXIMOS, PERFILES as _CALIDADES, limitar_calidad
 from descubrimiento import AnuncioLAN
 from transporte import ErrorConexion, Servidor
 from version import __version__
 
 
-_CALIDADES = {
-    "baja": (426, 240, 55),
-    "media": (640, 360, 70),
-    "alta": (960, 540, 82),
-}
-_ETIQUETAS_CALIDAD = {"Low": "baja", "Medium": "media", "High": "alta"}
+_ETIQUETAS_CALIDAD = {etiqueta: valor for valor, etiqueta in ETIQUETAS.items()}
 _TIEMPO_EVENTO = 2
 
 
@@ -115,6 +111,8 @@ def _icono(activo: bool) -> Image.Image:
 class _InicioSesion:
     cancelada: threading.Event
     vence: float
+    calidad_maxima: str = "maxima"
+    fps_maximos: int = FPS_MAXIMOS
     respondida: threading.Event = field(default_factory=threading.Event)
     aceptada: bool = False
 
@@ -132,10 +130,16 @@ class _Control:
 class _Captura:
     """La misma hebra abre, lee y libera la cámara; comparte una sola imagen."""
 
-    def __init__(self, dispositivo: int, calidad: str, fps: int):
+    def __init__(
+        self, dispositivo: int, calidad: str, fps: int, *,
+        calidad_fuente: str | None = None, fps_fuente: int | None = None,
+    ):
         self._dispositivo = dispositivo
         self._calidad = calidad
         self._fps = fps
+        self._calidad_fuente = calidad if calidad_fuente is None else calidad_fuente
+        self._fps_fuente = fps if fps_fuente is None else fps_fuente
+        self._revision = 0
         self._detener = threading.Event()
         self._lock = threading.Lock()
         self._ultimo: bytes | None = None
@@ -151,15 +155,74 @@ class _Captura:
 
     def ajustar(self, calidad: str, fps: int) -> None:
         with self._lock:
+            if (calidad, fps) == (self._calidad, self._fps):
+                return
             self._calidad = calidad
             self._fps = fps
+            self._revision += 1
+            self._ultimo = None
 
     def tomar_fotograma(self) -> bytes | None:
         with self._lock:
             imagen, self._ultimo = self._ultimo, None
             return imagen
 
+    def _configurar(self, camara):
+        """Elige un formato por sus fotogramas reales, aunque el driver ignore set()."""
+        # Los perfiles existentes conservan su adquisición de 960×540 y se
+        # reducen después; no todos los drivers aceptan tamaños de salida bajos.
+        candidatos = ((960, 540),)
+        if self._calidad_fuente == "maxima":
+            candidatos = ((3840, 2160), (2560, 1440), (1920, 1080), (1280, 720), (960, 540), (640, 480))
+            try:
+                camara.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except cv2.error:
+                pass
+
+        def formato(dimensiones):
+            for propiedad, valor in (
+                (cv2.CAP_PROP_FRAME_WIDTH, dimensiones[0]),
+                (cv2.CAP_PROP_FRAME_HEIGHT, dimensiones[1]),
+                (cv2.CAP_PROP_FPS, self._fps_fuente),
+            ):
+                try:
+                    camara.set(propiedad, valor)
+                except cv2.error:
+                    pass
+
+        mejor = None
+        mejor_area = 0
+        ultimo = None
+        for dimensiones in candidatos:
+            if self._detener.is_set():
+                return None
+            formato(dimensiones)
+            ultimo = dimensiones
+            try:
+                ok, imagen = camara.read()
+            except cv2.error:
+                continue
+            if not ok or imagen is None or imagen.size == 0:
+                continue
+            real_alto, real_ancho = imagen.shape[:2]
+            area = real_ancho * real_alto
+            if area > mejor_area:
+                mejor, mejor_area = dimensiones, area
+            if real_ancho >= dimensiones[0] and real_alto >= dimensiones[1]:
+                if mejor_area == area:
+                    return imagen
+                break
+
+        if mejor is None or self._detener.is_set():
+            return None
+        if mejor != ultimo:
+            formato(mejor)
+        ok, imagen = camara.read()
+        return imagen if ok and imagen is not None and imagen.size else None
+
     def _ejecutar(self) -> None:
+        from calidad import MAX_JPEG
+
         camara = None
         try:
             if self._detener.is_set():
@@ -174,14 +237,20 @@ class _Captura:
                 self.error = "Windows could not open the camera. Check the device and its permissions."
                 return
 
-            camara.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
-            camara.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
+            imagen = self._configurar(camara)
+            if imagen is None:
+                if not self._detener.is_set():
+                    self.error = "The camera could not provide a supported video format."
+                return
             while not self._detener.is_set():
                 inicio = time.monotonic()
                 with self._lock:
-                    calidad, fps = self._calidad, self._fps
+                    calidad, fps, revision = self._calidad, self._fps, self._revision
 
-                ok, imagen = camara.read()
+                if imagen is None:
+                    ok, imagen = camara.read()
+                else:
+                    ok = True
                 if self._detener.is_set():
                     return
                 if not ok or imagen is None:
@@ -201,8 +270,14 @@ class _Captura:
                 if not ok:
                     self.error = "Could not prepare the camera image."
                     return
+                datos = jpeg.tobytes()
+                if len(datos) > MAX_JPEG:
+                    self.error = "The encoded camera frame is too large. Select a lower quality."
+                    return
                 with self._lock:
-                    self._ultimo = jpeg.tobytes()
+                    if revision == self._revision and not self._detener.is_set():
+                        self._ultimo = datos
+                imagen = None
                 self._detener.wait(max(0, 1 / fps - (time.monotonic() - inicio)))
         except (cv2.error, OSError):
             self.error = "The camera is unavailable."
@@ -231,6 +306,8 @@ class _Anfitrion:
         self.calidad_maxima = "media"
         self.fps_actual = 10
         self.fps_maximos = 10
+        self.calidad_cliente = "maxima"
+        self.fps_cliente = FPS_MAXIMOS
         self.pausa_local = False
         self.pausa_remota = False
         self.permite_control = False
@@ -297,7 +374,7 @@ class _Anfitrion:
             (campo(3, "Maximum quality", ttk.Combobox(
                 ajustes, textvariable=self.calidad, values=tuple(_ETIQUETAS_CALIDAD), state="readonly",
             )), "readonly"),
-            (campo(4, "Maximum frame rate (FPS)", ttk.Spinbox(ajustes, textvariable=self.fps, from_=1, to=15)), "normal"),
+            (campo(4, "Maximum frame rate (FPS)", ttk.Spinbox(ajustes, textvariable=self.fps, from_=1, to=FPS_MAXIMOS)), "normal"),
         ]
         control = ttk.Checkbutton(
             ajustes, variable=self.ajustes_remotos, style="Host.TCheckbutton",
@@ -353,7 +430,7 @@ class _Anfitrion:
             self.indice_camara = int(self.camara.get())
             self.fps_maximos = int(self.fps.get())
             self.calidad_maxima = _ETIQUETAS_CALIDAD[self.calidad.get()]
-            if not (1 <= puerto <= 65535 and 0 <= self.indice_camara <= 15 and 1 <= self.fps_maximos <= 15):
+            if not (1 <= puerto <= 65535 and 0 <= self.indice_camara <= 15 and 1 <= self.fps_maximos <= FPS_MAXIMOS):
                 raise ValueError
         except (ValueError, KeyError):
             messagebox.showerror("LAN Camera", "Check the IPv4 address, port, camera index, quality, and frame rate.")
@@ -365,7 +442,9 @@ class _Anfitrion:
         try:
             servidor = Servidor(
                 ip, puerto,
-                lambda ip_visora, cancelada: self._solicitar(generacion, ip_visora, cancelada),
+                lambda ip_visora, cancelada, calidad, fps: self._solicitar(
+                    generacion, ip_visora, cancelada, calidad, fps,
+                ),
                 lambda pausa, calidad, fps: self._control(generacion, pausa, calidad, fps),
                 lambda: self.eventos.put(("terminar", generacion, None)),
                 al_cerrar=lambda: self.eventos.put(("salir_remoto", generacion, None)),
@@ -420,8 +499,11 @@ class _Anfitrion:
         else:
             self._estado(f"{conexion} · camera off")
 
-    def _solicitar(self, generacion: int, _ip: str, cancelada: threading.Event) -> bool:
-        inicio = _InicioSesion(cancelada, time.monotonic() + _TIEMPO_EVENTO)
+    def _solicitar(
+        self, generacion: int, _ip: str, cancelada: threading.Event,
+        calidad_maxima: str = "maxima", fps_maximos: int = FPS_MAXIMOS,
+    ) -> bool:
+        inicio = _InicioSesion(cancelada, time.monotonic() + _TIEMPO_EVENTO, calidad_maxima, fps_maximos)
         self.eventos.put(("iniciar", generacion, inicio))
         while not inicio.respondida.wait(.1):
             if cancelada.is_set() or time.monotonic() >= inicio.vence:
@@ -446,6 +528,11 @@ class _Anfitrion:
             inicio.aceptada = True
             self.autorizada = True
             self.cancelacion_activa = inicio.cancelada
+            self.calidad_cliente = inicio.calidad_maxima
+            self.fps_cliente = inicio.fps_maximos
+            self.calidad_actual = limitar_calidad(self.calidad_maxima, self.calidad_cliente)
+            self.fps_actual = min(self.fps_maximos, self.fps_cliente)
+            self._refrescar_captura()
             if self.pausa_local:
                 self._estado("Session paused · camera off")
             else:
@@ -464,11 +551,9 @@ class _Anfitrion:
         if self.permite_control:
             self.pausa_remota = solicitud.pausa
             if solicitud.calidad in _CALIDADES:
-                calidades = tuple(_CALIDADES)
-                self.calidad_actual = calidades[min(
-                    calidades.index(solicitud.calidad), calidades.index(self.calidad_maxima),
-                )]
-            self.fps_actual = max(1, min(solicitud.fps, self.fps_maximos))
+                limite = limitar_calidad(self.calidad_maxima, self.calidad_cliente)
+                self.calidad_actual = limitar_calidad(solicitud.calidad, limite)
+            self.fps_actual = max(1, min(solicitud.fps, self.fps_maximos, self.fps_cliente))
             self._refrescar_captura()
 
         solicitud.respuesta = {
@@ -502,7 +587,10 @@ class _Anfitrion:
                 self._suspender_captura("Local desktop unavailable · camera off")
                 return
             self.captura_cerrando = None
-            self.captura = _Captura(self.indice_camara, self.calidad_actual, self.fps_actual)
+            self.captura = _Captura(
+                self.indice_camara, self.calidad_actual, self.fps_actual,
+                calidad_fuente=self.calidad_maxima, fps_fuente=self.fps_maximos,
+            )
             self.limite_fotograma = time.monotonic() + 10
             if self.autorizada:
                 self._estado("Opening camera for the viewer", True)
@@ -527,6 +615,8 @@ class _Anfitrion:
         self.autorizada = False
         self.cancelacion_activa = None
         self.pausa_remota = False
+        self.calidad_cliente = "maxima"
+        self.fps_cliente = FPS_MAXIMOS
         self.calidad_actual = self.calidad_maxima
         self.fps_actual = self.fps_maximos
         self._refrescar_captura()

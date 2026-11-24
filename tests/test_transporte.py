@@ -65,7 +65,7 @@ class EmparejamientoTLSTests(unittest.TestCase):
         pendiente = threading.Event()
         autorizar = threading.Event()
 
-        def esperar_aprobacion(_ip, _cancelada):
+        def esperar_aprobacion(_ip, _cancelada, *_limites):
             pendiente.set()
             return autorizar.wait(5)
 

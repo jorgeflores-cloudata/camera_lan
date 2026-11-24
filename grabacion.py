@@ -13,8 +13,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+from calidad import FPS_MAXIMOS
 
-_FPS = 15
+
+_FPS = FPS_MAXIMOS
 _MAX_PENDIENTES = 6
 _MAX_INTERVALO = 1.25
 

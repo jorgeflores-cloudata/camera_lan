@@ -81,7 +81,7 @@ class VistaPreviaTests(unittest.TestCase):
 
     def test_al_habilitar_muestra_previa_sin_enviar_fotogramas(self):
         self.host._habilitar()
-        self.crear_captura.assert_called_once_with(0, "media", 10)
+        self.crear_captura.assert_called_once_with(0, "media", 10, calidad_fuente="media", fps_fuente=10)
 
         self.host._bucle()
 
@@ -344,6 +344,55 @@ class VistaPreviaTests(unittest.TestCase):
                 autorizada()
                 accion.assert_called_once_with()
                 self.host.acceso.solicitar.reset_mock()
+
+    def test_maximum_respeta_los_limites_locales_del_anfitrion(self):
+        self.host.ajustes_remotos.set(True)
+        self.host.calidad.set("High")
+        self.host.fps.set("12")
+        self.host._habilitar()
+        self._conectar_visor()
+        control = anfitrion._Control(False, "maxima", 30, time.monotonic() + 30)
+
+        self.host._aplicar_control(control)
+
+        self.assertEqual(control.respuesta, {"pausa": False, "calidad": "alta", "fps": 12})
+        self.captura.ajustar.assert_called_with("alta", 12)
+
+    def test_cliente_anterior_recibe_limites_compatibles_con_maximum_local(self):
+        self.host.calidad.set("Maximum")
+        self.host.fps.set("30")
+        self.host._habilitar()
+        inicio = anfitrion._InicioSesion(
+            threading.Event(), time.monotonic() + 30, calidad_maxima="alta", fps_maximos=15,
+        )
+
+        self.host._iniciar_sesion(inicio)
+        control = anfitrion._Control(False, "maxima", 30, time.monotonic() + 30)
+        self.host._aplicar_control(control)
+
+        self.assertTrue(inicio.aceptada)
+        self.assertEqual(control.respuesta, {"pausa": False, "calidad": "alta", "fps": 15})
+        self.captura.ajustar.assert_called_with("alta", 15)
+        self.crear_captura.assert_called_once_with(
+            0, "maxima", 30, calidad_fuente="maxima", fps_fuente=30,
+        )
+
+    def test_reanudar_calidad_baja_conserva_la_fuente_maximum(self):
+        self.host.ajustes_remotos.set(True)
+        self.host.calidad.set("Maximum")
+        self.host.fps.set("30")
+        self.host._habilitar()
+        self._conectar_visor()
+        pausa = anfitrion._Control(True, "baja", 5, time.monotonic() + 30)
+        self.host._aplicar_control(pausa)
+        self.captura.viva.return_value = False
+
+        reanudar = anfitrion._Control(False, "baja", 5, time.monotonic() + 30)
+        self.host._aplicar_control(reanudar)
+
+        self.crear_captura.assert_called_with(
+            0, "baja", 5, calidad_fuente="maxima", fps_fuente=30,
+        )
 
     def test_cierre_remoto_sale_de_la_aplicacion_y_libera_recursos_sin_pin(self):
         self.host._habilitar()

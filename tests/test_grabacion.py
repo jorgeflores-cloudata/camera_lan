@@ -47,7 +47,7 @@ class GrabacionTests(unittest.TestCase):
         video = cv2.VideoCapture(str(self.ruta))
         try:
             self.assertTrue(video.isOpened())
-            self.assertEqual(video.get(cv2.CAP_PROP_FPS), 15)
+            self.assertEqual(video.get(cv2.CAP_PROP_FPS), 30)
             fotogramas = []
             while True:
                 ok, imagen = video.read()
@@ -69,8 +69,8 @@ class GrabacionTests(unittest.TestCase):
         resultado = self._finalizar(escritura)
         self.assertEqual(resultado, grabacion.ResultadoGrabacion(self.ruta))
         imagenes = self._leer_fotogramas()
-        self.assertEqual(len(imagenes), 15)
-        self.assertEqual([imagen.shape for imagen in imagenes], [(40, 58, 3)] * 15)
+        self.assertEqual(len(imagenes), 30)
+        self.assertEqual([imagen.shape for imagen in imagenes], [(40, 58, 3)] * 30)
         self.assertGreater(imagenes[0][20, 29, 2], 200)
         self.assertGreater(imagenes[-1][20, 29, 1], 90)
         self.assertLess(int(imagenes[-1][20, 2].max()), 10)
@@ -86,7 +86,7 @@ class GrabacionTests(unittest.TestCase):
 
         self.assertIsNone(self._finalizar(escritura).error)
         imagenes = self._leer_fotogramas()
-        self.assertEqual(len(imagenes), 12)
+        self.assertEqual(len(imagenes), 24)
         self.assertGreater(imagenes[0][20, 29, 2], 200)
         self.assertGreater(imagenes[-1][20, 29, 1], 90)
 
