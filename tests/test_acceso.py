@@ -126,11 +126,3 @@ class DialogTests(unittest.TestCase):
 
         accion.assert_not_called()
         self.ventana.destroy.assert_called_once()
-
-    def test_startup_waits_only_for_its_temporary_dialog(self):
-        with patch.object(acceso.tk, "Tk", return_value=self.raiz):
-            self.raiz.wait_window.side_effect = lambda _: self._pulsar("Unlock")
-            self.assertTrue(acceso.autorizar_inicio())
-        self.raiz.withdraw.assert_called_once()
-        self.raiz.wait_window.assert_called_once_with(self.ventana)
-        self.raiz.destroy.assert_called_once()

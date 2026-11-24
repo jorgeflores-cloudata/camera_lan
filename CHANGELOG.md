@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1 — 2026-11-24
+
+- The PIN protects commands from the Windows tray. The launchers and window controls work directly.
+
 ## 1.3.0 — 2026-11-24
 
 - Click **Connect** to view a camera by IP address and port once the host enables LAN sharing. A viewer can connect while the host is minimized to the tray.

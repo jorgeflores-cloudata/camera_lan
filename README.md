@@ -1,6 +1,6 @@
 # LAN Camera
 
-Current version **1.3.0**. See the [changelog](CHANGELOG.md).
+Current version **1.3.1**. See the [changelog](CHANGELOG.md).
 
 Connect two devices to the same local network. Run **Share** on the Windows 11 device with the camera and **View** on the other device.
 
@@ -12,9 +12,9 @@ Connect two devices to the same local network. Run **Share** on the Windows 11 d
 
 If **Setup.cmd** reports a Tcl/Tk problem, run `py -3 -m tkinter` to check for the demo window. If your installation has only the `python` command, run `python -m tkinter`.
 
-## Local PIN
+## Tray PIN
 
-Enter the PIN to open LAN Camera and use its controls, including **Open**, **Close connection**, and **Exit** in the tray menu. The initial PIN is `0000`. Use **Change PIN** in either window to set a new PIN with 4 to 12 digits. Each device stores its own local PIN.
+Enter the PIN when choosing **Open**, **Close connection**, or **Exit** from the icon by the Windows clock. The initial PIN is `0000`. Use **Change PIN** in the **Share** window to set a new PIN with 4 to 12 digits.
 
 ## Share and view
 

@@ -250,8 +250,8 @@ class _Anfitrion:
         self.estado = tk.StringVar(value="Camera off")
 
         self._construir(direcciones)
-        raiz.protocol("WM_DELETE_WINDOW", lambda: self.acceso.solicitar(self._ocultar, "Close window"))
-        raiz.bind("<Escape>", lambda _evento: self.acceso.solicitar(self._dejar_de_compartir, "Close connection"))
+        raiz.protocol("WM_DELETE_WINDOW", self._ocultar)
+        raiz.bind("<Escape>", lambda _evento: self._dejar_de_compartir())
         raiz.bind("<Unmap>", self._al_ocultar)
         raiz.after(35, self._bucle)
 
@@ -315,22 +315,22 @@ class _Anfitrion:
         botones.pack(fill="x", pady=(10, 8))
         self.habilitar = ttk.Button(
             botones, text="Enable LAN sharing",
-            command=lambda: self.acceso.solicitar(self._habilitar, "Enable LAN sharing"),
+            command=self._habilitar,
         )
         self.habilitar.pack(side="left")
         self.pausar = ttk.Button(
             botones, text="Pause camera", state="disabled",
-            command=lambda: self.acceso.solicitar(self._alternar_pausa, self.pausar.cget("text")),
+            command=self._alternar_pausa,
         )
         self.pausar.pack(side="left", padx=6)
         self.detener = ttk.Button(
             botones, text="Close connection", state="disabled",
-            command=lambda: self.acceso.solicitar(self._cerrar_conexion, "Close connection"),
+            command=self._cerrar_conexion,
         )
         self.detener.pack(side="left")
         ttk.Button(
             botones, text="Minimize to tray",
-            command=lambda: self.acceso.solicitar(self._minimizar_a_bandeja, "Minimize to tray"),
+            command=self._minimizar_a_bandeja,
         ).pack(side="right")
 
         self.area_previa = tk.Frame(panel, bg="#203047")
@@ -588,8 +588,7 @@ class _Anfitrion:
 
     def _al_ocultar(self, evento) -> None:
         if evento.widget is self.raiz and self.raiz.state() == "iconic":
-            self.raiz.deiconify()
-            self.acceso.solicitar(self._minimizar_a_bandeja, "Minimize to tray")
+            self._minimizar_a_bandeja()
 
     def _suspender_si_oculta(self) -> None:
         self._suspender_captura("Window closed · camera off")

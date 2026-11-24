@@ -169,21 +169,3 @@ class Acceso:
         ventana.grab_set()
         entradas[0].focus_set()
         return ventana
-
-
-def autorizar_inicio() -> bool:
-    """Prompts for the PIN before any application window is shown."""
-    raiz = tk.Tk()
-    raiz.withdraw()
-    autorizado = False
-
-    def continuar():
-        nonlocal autorizado
-        autorizado = True
-
-    try:
-        ventana = Acceso(raiz).solicitar(continuar, "Unlock LAN Camera")
-        raiz.wait_window(ventana)
-        return autorizado
-    finally:
-        raiz.destroy()

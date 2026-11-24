@@ -171,17 +171,12 @@ class VistaPreviaTests(unittest.TestCase):
         self._conectar_visor()
         self.servidor.publicar.reset_mock()
         self.raiz.state.return_value = "iconic"
-        self.host.acceso.solicitar.side_effect = None
 
         self.host._al_ocultar(SimpleNamespace(widget=self.raiz))
 
-        self.raiz.deiconify.assert_called_once_with()
-        self.raiz.withdraw.assert_not_called()
-        self.host.acceso.solicitar.assert_called_once()
-        minimizar, titulo = self.host.acceso.solicitar.call_args.args
-        self.assertEqual(titulo, "Minimize to tray")
+        self.raiz.deiconify.assert_not_called()
+        self.host.acceso.solicitar.assert_not_called()
 
-        minimizar()
         control = anfitrion._Control(False, "baja", 5, time.monotonic() + 30)
         self.host.eventos.put(("control", self.host.generacion, control))
         self.host.ultima_comprobacion = time.monotonic() - 1
@@ -195,6 +190,29 @@ class VistaPreviaTests(unittest.TestCase):
         self.assertTrue(control.respondido.is_set())
         self.assertEqual(control.respuesta, {"pausa": False, "calidad": "baja", "fps": 5})
         self.servidor.publicar.assert_called_once_with(self.jpeg)
+
+    def test_botones_de_la_ventana_ejecutan_acciones_sin_pin(self):
+        with patch.object(anfitrion, "ttk") as ttk, patch.object(anfitrion, "tk"):
+            self.host._construir(["192.168.0.2"])
+        botones = {
+            llamada.kwargs["text"]: llamada.kwargs["command"]
+            for llamada in ttk.Button.call_args_list
+        }
+
+        botones["Enable LAN sharing"]()
+        self.servidor.iniciar.assert_called_once_with()
+        self.crear_captura.assert_called_once()
+
+        botones["Pause camera"]()
+        self.captura.detener.assert_called_once_with()
+        self.assertTrue(self.host.pausa_local)
+
+        botones["Close connection"]()
+        self.servidor.cerrar.assert_called_once_with()
+
+        botones["Minimize to tray"]()
+        self.raiz.withdraw.assert_called_once_with()
+        self.host.acceso.solicitar.assert_not_called()
 
     def test_el_visor_puede_pausar_y_reanudar_mientras_el_anfitrion_esta_en_bandeja(self):
         self.host.ajustes_remotos.set(True)
