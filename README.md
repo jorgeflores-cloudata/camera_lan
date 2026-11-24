@@ -1,6 +1,6 @@
 # LAN Camera
 
-Current version **1.6.0**. See the [changelog](CHANGELOG.md).
+Current version **1.6.1**. See the [changelog](CHANGELOG.md).
 
 Connect two devices to the same local network. Run **Share** on the Windows 11 device with the camera and **View** on the other device.
 
@@ -25,7 +25,7 @@ Enter the PIN when choosing **Open**, **Close connection**, or **Exit** from the
 
 The Viewer saves the IP address and port of the ten most recent successful connections on this device. Choose one from **Recent connections**, then click **Connect**. Connections with a previously saved camera identity also appear when the history is first created.
 
-**Minimize to tray** and the Windows minimize button hide the window and leave the blue network icon by the clock. The camera, new connections, an active stream, discovery, and viewer controls continue in the background. Choose **Open** to restore the window. An amber dot indicates that the camera is on or starting.
+**Minimize to tray** and the Windows minimize button hide the window and leave the blue network icon by the clock. The camera, new connections, an active stream, discovery, and viewer controls continue in the background. Choose **Open** to restore the window. An amber dot indicates that the camera is on or starting. Hover over the icon to see the version number.
 
 Choose **Close connection** in the host window or on the tray icon to stop the camera, disconnect the viewer, and release the port. The title-bar **X** or locking Windows turns off the camera and ends an active session. If the camera was waiting for a viewer, click **Resume camera** after returning.
 

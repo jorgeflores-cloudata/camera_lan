@@ -560,10 +560,8 @@ class _Anfitrion:
             bg="#9f2f3a" if activo else "#e0e8f5",
             fg="white" if activo else "#1a2940",
         )
-        if self.bandeja is not None:
-            if self.en_vivo != activo:
-                self.bandeja.icon = _icono(activo)
-            self.bandeja.title = f"LAN Camera · {texto}"
+        if self.bandeja is not None and self.en_vivo != activo:
+            self.bandeja.icon = _icono(activo)
         self.en_vivo = activo
 
     def _botones(self) -> None:
@@ -713,7 +711,7 @@ def ejecutar() -> None:
     raiz.iconphoto(True, ImageTk.PhotoImage(_icono(False), master=raiz))
     anfitrion = _Anfitrion(raiz)
     anfitrion.bandeja = pystray.Icon(
-        "CamaraLAN", _icono(False), "LAN Camera · camera off",
+        "CamaraLAN", _icono(False), __version__,
         pystray.Menu(
             pystray.MenuItem("Open", lambda *_: anfitrion.eventos.put(("abrir", None, None)), default=True),
             pystray.MenuItem(

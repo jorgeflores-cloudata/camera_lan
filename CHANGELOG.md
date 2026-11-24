@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1 — 2026-11-24
+
+- The Windows tray tooltip shows the version number only.
+
 ## 1.6.0 — 2026-11-24
 
 - The Viewer supports digital zoom with the mouse wheel, zoom buttons, drag to pan, and a reset control. Recordings use the same framing shown in the Viewer.
