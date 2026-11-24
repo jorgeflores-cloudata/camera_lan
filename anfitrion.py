@@ -304,7 +304,7 @@ class _Anfitrion:
         ).pack(anchor="w")
         acciones = ttk.Frame(self.panel_solicitud, style="Host.TFrame")
         acciones.pack(anchor="w", pady=(4, 0))
-        ttk.Button(acciones, text="Aceptar y encender cámara", command=lambda: self._responder(True)).pack(side="left")
+        ttk.Button(acciones, text="Aceptar y compartir", command=lambda: self._responder(True)).pack(side="left")
         ttk.Button(acciones, text="Rechazar", command=lambda: self._responder(False)).pack(side="left", padx=5)
 
         botones = ttk.Frame(panel, style="Host.TFrame")
@@ -376,16 +376,30 @@ class _Anfitrion:
             anuncio.cerrar()
         else:
             self.anuncio = anuncio
+        self.calidad_actual = self.calidad_maxima
+        self.fps_actual = self.fps_maximos
+        self._refrescar_captura()
         self._mostrar_espera()
         self._botones()
         if self.bandeja is not None:
             self.bandeja.update_menu()
 
     def _mostrar_espera(self) -> None:
-        if self.anuncio is None:
-            self._estado("Esperando solicitud por IP y puerto · cámara apagada")
+        if self.solicitud is not None:
+            conexion = "Solicitud pendiente"
+        elif self.anuncio is None:
+            conexion = "Esperando solicitud por IP y puerto"
         else:
-            self._estado("Disponible en la LAN · cámara apagada")
+            conexion = "Disponible en la LAN"
+
+        if self.foto is not None:
+            self._estado(f"{conexion} · vista previa local", True)
+        elif self.captura is not None:
+            self._estado(f"{conexion} · abriendo cámara", True)
+        elif self.pausa_local:
+            self._estado(f"{conexion} · cámara en pausa")
+        else:
+            self._estado(f"{conexion} · cámara apagada")
 
     def _solicitar(self, generacion: int, ip: str, cancelada: threading.Event) -> bool:
         solicitud = _Solicitud(ip, cancelada, time.monotonic() + _TIEMPO_APROBACION)
@@ -413,7 +427,7 @@ class _Anfitrion:
         self.solicitud = solicitud
         self.texto_solicitud.set(f"El dispositivo {solicitud.ip} pide ver la cámara.")
         self.panel_solicitud.pack(fill="x", before=self.pausar.master)
-        self._estado("Solicitud pendiente · cámara apagada")
+        self._mostrar_espera()
         self._abrir()
         self.raiz.bell()
 
@@ -428,11 +442,13 @@ class _Anfitrion:
         if solicitud.aceptada:
             self.autorizada = True
             self.cancelacion_activa = solicitud.cancelada
-            self.pausa_local = False
             self.pausa_remota = False
             self.calidad_actual = self.calidad_maxima
             self.fps_actual = self.fps_maximos
-            self._estado("Abriendo cámara para la sesión aprobada", True)
+            if self.pausa_local:
+                self._estado("Sesión en pausa · cámara apagada")
+            else:
+                self._estado("Sesión aprobada · iniciando transmisión", True)
         elif self.servidor is not None:
             self._mostrar_espera()
         solicitud.respondida.set()
@@ -463,7 +479,7 @@ class _Anfitrion:
         solicitud.respondido.set()
 
     def _alternar_pausa(self) -> None:
-        if self.autorizada:
+        if self.servidor is not None:
             self.pausa_local = not self.pausa_local
             self._refrescar_captura()
             self._botones()
@@ -472,28 +488,38 @@ class _Anfitrion:
         return self.pausa_local or self.pausa_remota
 
     def _refrescar_captura(self) -> None:
-        if not self.autorizada:
+        if self.servidor is None:
             return
         if self._en_pausa():
-            self._detener_captura()
-            self._estado("Sesión en pausa · cámara apagada", True)
+            if self.captura is not None:
+                self._detener_captura()
+            if self.autorizada:
+                self._estado("Sesión en pausa · cámara apagada")
+            else:
+                self._mostrar_espera()
         elif self.captura is not None:
             self.captura.ajustar(self.calidad_actual, self.fps_actual)
         elif self.captura_cerrando is None or not self.captura_cerrando.viva():
-            if self.cancelacion_activa is None or self.cancelacion_activa.is_set() or not self._puede_compartir():
+            if not self._puede_compartir():
+                self._suspender_captura("Escritorio local no disponible · cámara apagada")
+                return
+            if self.autorizada and (self.cancelacion_activa is None or self.cancelacion_activa.is_set()):
                 self._dejar_de_compartir("Sesión cerrada · cámara apagada")
                 return
             self.captura_cerrando = None
             self.captura = _Captura(self.indice_camara, self.calidad_actual, self.fps_actual)
             self.limite_fotograma = time.monotonic() + 10
-            self._estado("Abriendo cámara para la sesión aprobada", True)
+            if self.autorizada:
+                self._estado("Abriendo cámara para la sesión aprobada", True)
+            else:
+                self._mostrar_espera()
 
     def _detener_captura(self) -> None:
         if self.captura is not None:
             self.captura.detener()
             self.captura_cerrando = self.captura
             self.captura = None
-        if self.servidor is not None:
+        if self.servidor is not None and self.autorizada:
             self.servidor.publicar(None)
         self.limite_fotograma = None
         self.foto = None
@@ -528,14 +554,17 @@ class _Anfitrion:
             self.bandeja.update_menu()
 
     def _estado(self, texto: str, activo: bool = False) -> None:
+        if self.estado.get() == texto and self.en_vivo == activo:
+            return
         self.estado.set(texto)
         self.indicador.configure(
             bg="#9f2f3a" if activo else "#e0e8f5",
             fg="white" if activo else "#1a2940",
         )
-        if self.bandeja is not None and self.en_vivo != activo:
-            self.bandeja.icon = _icono(activo)
-            self.bandeja.title = "Cámara LAN · sesión aprobada" if activo else "Cámara LAN · cámara apagada"
+        if self.bandeja is not None:
+            if self.en_vivo != activo:
+                self.bandeja.icon = _icono(activo)
+            self.bandeja.title = f"Cámara LAN · {texto}"
         self.en_vivo = activo
 
     def _botones(self) -> None:
@@ -545,8 +574,8 @@ class _Anfitrion:
         self.habilitar.configure(state="disabled" if preparado else "normal")
         self.detener.configure(state="normal" if preparado else "disabled")
         self.pausar.configure(
-            state="normal" if self.autorizada else "disabled",
-            text="Quitar pausa local" if self.pausa_local else "Pausar cámara",
+            state="normal" if preparado else "disabled",
+            text="Reanudar cámara" if self.pausa_local else "Pausar cámara",
         )
 
     def _puede_compartir(self) -> bool:
@@ -560,10 +589,24 @@ class _Anfitrion:
             self._suspender_si_oculta()
 
     def _suspender_si_oculta(self) -> None:
+        self._suspender_captura("Ventana oculta · cámara apagada")
+
+    def _suspender_captura(self, estado: str) -> None:
+        if self.servidor is None:
+            return
         if self.autorizada:
-            self._dejar_de_compartir("Ventana oculta · cámara apagada")
-        elif self.solicitud is not None:
+            self._dejar_de_compartir(estado)
+            return
+
+        # Una solicitud remota puede volver a mostrar la ventana. Solo un
+        # clic local en Reanudar cámara puede reactivar la vista previa.
+        if not self.pausa_local:
+            self.pausa_local = True
+            self._detener_captura()
+            self._botones()
+        if self.solicitud is not None:
             self._responder(False)
+        self._mostrar_espera()
 
     def _ocultar(self) -> None:
         self._suspender_si_oculta()
@@ -583,6 +626,12 @@ class _Anfitrion:
     def _mostrar_fotograma(self) -> None:
         if self.servidor is None or self.captura is None:
             return
+        if not self._puede_compartir():
+            self._suspender_captura("Escritorio local no disponible · cámara apagada")
+            return
+        if self.autorizada and (self.cancelacion_activa is None or self.cancelacion_activa.is_set()):
+            self._dejar_de_compartir("Sesión cerrada · cámara apagada")
+            return
         if self.captura.error:
             self._dejar_de_compartir(self.captura.error)
             return
@@ -593,18 +642,17 @@ class _Anfitrion:
                 self._dejar_de_compartir("La cámara no respondió a tiempo.")
             return
 
-        if not self._puede_compartir() or self.cancelacion_activa is None or self.cancelacion_activa.is_set():
-            self._dejar_de_compartir("Sesión cerrada · cámara apagada")
-            return
         self.limite_fotograma = time.monotonic() + 10
         with Image.open(BytesIO(jpeg)) as cuadro:
             espacio = (max(1, self.area_previa.winfo_width() - 8), max(1, self.area_previa.winfo_height() - 8))
             cuadro.thumbnail(espacio, Image.Resampling.BILINEAR)
             self.foto = ImageTk.PhotoImage(cuadro)
         self.previa.configure(image=self.foto, text="")
-        self.servidor.publicar(jpeg)
-        if self.estado.get() != "Compartiendo cámara en vivo":
+        if self.autorizada:
+            self.servidor.publicar(jpeg)
             self._estado("Compartiendo cámara en vivo", True)
+        else:
+            self._mostrar_espera()
 
     def _bucle(self) -> None:
         for _ in range(20):
@@ -636,10 +684,7 @@ class _Anfitrion:
         if self.servidor is not None and ahora - self.ultima_comprobacion >= .35:
             self.ultima_comprobacion = ahora
             if not _escritorio_disponible():
-                if self.autorizada:
-                    self._dejar_de_compartir("Escritorio bloqueado · cámara apagada")
-                elif self.solicitud is not None:
-                    self._responder(False)
+                self._suspender_captura("Escritorio bloqueado · cámara apagada")
             elif not self._ventana_visible():
                 self._suspender_si_oculta()
 
@@ -647,7 +692,7 @@ class _Anfitrion:
             if self.solicitud.cancelada.is_set() or ahora >= self.solicitud.vence:
                 self._responder(False)
 
-        if self.autorizada and not self._en_pausa():
+        if self.servidor is not None and not self._en_pausa():
             self._refrescar_captura()
             self._mostrar_fotograma()
 

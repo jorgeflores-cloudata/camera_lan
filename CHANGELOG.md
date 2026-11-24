@@ -1,5 +1,10 @@
 # Cambios
 
+## 1.1.1 — 2026-11-24
+
+- **Habilitar conexión** abre la vista previa local. El visor recibe video después de que el anfitrión pulse **Aceptar y compartir**.
+- Es posible pausar la cámara mientras se esperan solicitudes. Al ocultar la ventana o bloquear Windows, la vista previa se apaga y requiere reanudación local.
+
 ## 1.1.0 — 2026-11-24
 
 - El visor descubre cámaras en la LAN y admite conexión manual por IPv4 y puerto. Cada sesión requiere aprobación en el anfitrión y el video se transmite por TLS.

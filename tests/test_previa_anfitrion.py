@@ -1,0 +1,141 @@
+"""Pruebas de la vista previa local sin abrir una cámara ni una ventana."""
+
+from io import BytesIO
+import threading
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+from PIL import Image
+
+import anfitrion
+
+
+class _Variable:
+    def __init__(self, value=None):
+        self.valor = value
+
+    def get(self):
+        return self.valor
+
+    def set(self, valor):
+        self.valor = valor
+
+
+class VistaPreviaTests(unittest.TestCase):
+    def setUp(self):
+        self.raiz = Mock()
+        self.raiz.state.return_value = "normal"
+        with (
+            patch.object(anfitrion.tk, "StringVar", _Variable),
+            patch.object(anfitrion.tk, "BooleanVar", _Variable),
+            patch.object(anfitrion._Anfitrion, "_construir"),
+            patch.object(anfitrion, "_direcciones_locales", return_value=["192.168.0.2"]),
+        ):
+            self.host = anfitrion._Anfitrion(self.raiz)
+
+        self.host.campos = []
+        self.host.habilitar = Mock()
+        self.host.detener = Mock()
+        self.host.pausar = Mock()
+        self.host.indicador = Mock()
+        self.host.panel_solicitud = Mock()
+        self.host.previa = Mock()
+        self.host.area_previa = Mock()
+        self.host.area_previa.winfo_width.return_value = 100
+        self.host.area_previa.winfo_height.return_value = 100
+
+        self.escritorio = self.enterContext(patch.object(anfitrion, "_escritorio_disponible", return_value=True))
+        self.crear_captura = self.enterContext(patch.object(anfitrion, "_Captura"))
+        self.servidor = self.enterContext(patch.object(anfitrion, "Servidor")).return_value
+        self.anuncio = self.enterContext(patch.object(anfitrion, "AnuncioLAN")).return_value
+        self.crear_foto = self.enterContext(patch.object(anfitrion.ImageTk, "PhotoImage"))
+
+        salida = BytesIO()
+        Image.new("RGB", (20, 20)).save(salida, format="JPEG")
+        self.jpeg = salida.getvalue()
+        self.captura = self.crear_captura.return_value
+        self.captura.error = None
+        self.captura.tomar_fotograma.return_value = self.jpeg
+
+    def _solicitud(self):
+        return anfitrion._Solicitud("192.168.0.3", threading.Event(), time.monotonic() + 30)
+
+    def test_al_habilitar_muestra_previa_sin_enviar_fotogramas(self):
+        self.host._habilitar()
+        self.crear_captura.assert_called_once_with(0, "media", 10)
+
+        self.host._bucle()
+
+        self.crear_foto.assert_called_once()
+        self.host.previa.configure.assert_called_with(image=self.crear_foto.return_value, text="")
+        self.servidor.publicar.assert_not_called()
+        self.assertFalse(self.host.autorizada)
+
+    def test_la_solicitud_pendiente_solo_publica_despues_de_aceptar(self):
+        self.host._habilitar()
+        solicitud = self._solicitud()
+        self.host._mostrar_solicitud(solicitud)
+        self.host._mostrar_fotograma()
+        self.servidor.publicar.assert_not_called()
+        self.assertFalse(solicitud.respondida.is_set())
+
+        self.host._responder(True)
+        self.host._mostrar_fotograma()
+
+        self.crear_captura.assert_called_once()
+        self.assertTrue(solicitud.aceptada)
+        self.servidor.publicar.assert_called_once_with(self.jpeg)
+
+        solicitud.cancelada.set()
+        self.host._mostrar_fotograma()
+        fotogramas = [argumentos.args[0] for argumentos in self.servidor.publicar.call_args_list if argumentos.args[0]]
+        self.assertEqual(fotogramas, [self.jpeg])
+
+    def test_ocultar_apaga_la_previa_y_exige_reanudarla(self):
+        self.host._habilitar()
+        self.raiz.state.return_value = "withdrawn"
+
+        self.host._ocultar()
+        self.host._bucle()
+
+        self.captura.detener.assert_called_once()
+        self.crear_captura.assert_called_once()
+        self.servidor.cerrar.assert_not_called()
+        self.assertIsNone(self.host.captura)
+        self.assertIs(self.host.servidor, self.servidor)
+
+        self.captura.viva.return_value = False
+        self.raiz.state.return_value = "normal"
+        self.host._bucle()
+        self.crear_captura.assert_called_once()
+
+        self.host._alternar_pausa()
+        self.host._bucle()
+        self.assertEqual(self.crear_captura.call_count, 2)
+
+    def test_bloquear_el_escritorio_apaga_la_previa_y_rechaza_la_solicitud(self):
+        self.host._habilitar()
+        solicitud = self._solicitud()
+        self.host._mostrar_solicitud(solicitud)
+        self.escritorio.return_value = False
+
+        self.host._bucle()
+
+        self.captura.detener.assert_called_once()
+        self.crear_captura.assert_called_once()
+        self.assertTrue(solicitud.respondida.is_set())
+        self.assertFalse(solicitud.aceptada)
+        self.assertIsNone(self.host.captura)
+        self.servidor.cerrar.assert_not_called()
+
+    def test_cerrar_conexion_detiene_la_previa_y_libera_el_servidor(self):
+        self.host._habilitar()
+
+        self.host._cerrar_conexion()
+
+        self.captura.detener.assert_called_once()
+        self.anuncio.cerrar.assert_called_once()
+        self.servidor.cerrar.assert_called_once()
+        self.assertIsNone(self.host.captura)
+        self.assertIsNone(self.host.servidor)
