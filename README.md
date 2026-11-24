@@ -1,6 +1,6 @@
 # LAN Camera
 
-Current version **1.4.0**. See the [changelog](CHANGELOG.md).
+Current version **1.5.0**. See the [changelog](CHANGELOG.md).
 
 Connect two devices to the same local network. Run **Share** on the Windows 11 device with the camera and **View** on the other device.
 
@@ -31,13 +31,21 @@ Choose **Close connection** in the host window or on the tray icon to stop the c
 
 LAN Camera runs once per Windows session. To switch modes or load an update, choose **Exit** on the tray icon before starting it again. **Share.cmd** and **View.cmd** are also available in the project root.
 
-Video travels over encrypted TLS to one viewer at a time. A session can last up to 30 minutes and the viewer receives live video only.
+Live video travels over encrypted TLS to one viewer at a time. A session can last up to 30 minutes.
 
 After the first connection, the viewer remembers the camera's identity for that IP address and port. If it changes, the viewer blocks the connection and explains the change. After verifying an expected change, click **Forget identity** and connect again.
 
 The host allows up to five connection attempts per minute. If you reach the limit, wait a minute before trying again.
 
 If the host cannot open the camera, go to **Settings → Privacy & security → Camera** and allow desktop apps to access it. Discovery uses IPv4 multicast over UDP port `55443`. If your network blocks multicast, connect using the host's IPv4 address and port. Guest networks may prevent devices from reaching each other.
+
+## Record in the Viewer
+
+1. Connect to the camera and wait for live video.
+2. Click **Start recording** and choose where to save the MP4 on the device running the Viewer.
+3. Click **Stop recording** to finish. Disconnecting or closing the Viewer also saves the recording.
+
+The file contains the camera video displayed in the Viewer. Recording resumes when live video returns after a pause.
 
 ## Build a Windows executable
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.0 — 2026-11-24
+
+- The Viewer can record displayed camera video to a local MP4 file. Stopping, disconnecting or closing the Viewer finalizes the file.
+
 ## 1.4.0 — 2026-11-24
 
 - The Viewer saves the ten most recent successful IP and port combinations. Choose a saved connection to fill in the address and port fields.

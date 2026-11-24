@@ -8,12 +8,15 @@ import threading
 import time
 import tkinter as tk
 from dataclasses import dataclass, field
+from datetime import datetime
 from io import BytesIO
-from tkinter import messagebox, ttk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
 from descubrimiento import CamaraLAN, buscar_camaras
+from grabacion import Grabacion
 from historial import ErrorHistorial, leer_recientes, registrar_conexion
 from transporte import ErrorConexion, Visor
 from version import __version__
@@ -140,6 +143,9 @@ class _Panel:
         self.camaras: list[CamaraLAN] = []
         self.recientes: list[tuple[str, int]] = []
         self.resultados_recientes: queue.SimpleQueue[list[tuple[str, int]] | None] = queue.SimpleQueue()
+        self.grabacion: Grabacion | None = None
+        self.guardando_grabacion = False
+        self.cerrando = False
 
         self.host = tk.StringVar()
         self.puerto = tk.StringVar(value="8443")
@@ -149,6 +155,7 @@ class _Panel:
         self.estado = tk.StringVar(value="Disconnected")
         self.efectivos = tk.StringVar(value="Applied settings · —")
         self.aviso_ajustes = tk.StringVar()
+        self.estado_grabacion = tk.StringVar()
 
         raiz.title(f"LAN Camera — Viewer · v{__version__}")
         raiz.minsize(680, 480)
@@ -217,10 +224,13 @@ class _Panel:
             ajustes, textvariable=self.fps, values=tuple(str(valor) for valor in range(1, 16)), width=3
         )
         self.selector_fps.pack(side="left")
+        self.boton_grabar = ttk.Button(ajustes, text="Start recording", command=self._alternar_grabacion)
+        self.boton_grabar.pack(side="right")
         self.selector_calidad.bind("<<ComboboxSelected>>", self._actualizar_ajustes)
         self.selector_fps.bind("<<ComboboxSelected>>", self._actualizar_ajustes)
         ttk.Label(panel, textvariable=self.efectivos).pack(anchor="w")
         ttk.Label(panel, textvariable=self.aviso_ajustes).pack(anchor="w")
+        ttk.Label(panel, textvariable=self.estado_grabacion, wraplength=610).pack(anchor="w")
         try:
             self._mostrar_recientes(leer_recientes())
         except ErrorHistorial:
@@ -346,7 +356,7 @@ class _Panel:
         return "break"
 
     def _conectar(self) -> None:
-        if self.sesion is not None:
+        if self.sesion is not None or self.cerrando:
             return
 
         try:
@@ -389,13 +399,14 @@ class _Panel:
     def _actualizar_controles(self) -> None:
         conectando = self.sesion is not None
         buscando = self.busqueda is not None
+        disponible = not conectando and not self.cerrando
         for control in (self.entrada_host, self.entrada_puerto, self.conectar, self.olvidar, self.boton_buscar):
-            control.configure(state="disabled" if conectando else "normal")
+            control.configure(state="normal" if disponible else "disabled")
         self.boton_buscar.configure(text="Cancel search" if buscando else "Find cameras")
         self.selector_camaras.configure(
-            state="readonly" if self.camaras and not conectando and not buscando else "disabled",
+            state="readonly" if self.camaras and disponible and not buscando else "disabled",
         )
-        self.selector_recientes.configure(state="readonly" if self.recientes and not conectando else "disabled")
+        self.selector_recientes.configure(state="readonly" if self.recientes and disponible else "disabled")
         self.desconectar.configure(state="normal" if conectando else "disabled")
         self.boton_pausa.configure(
             state="normal" if self.conectada else "disabled",
@@ -403,8 +414,79 @@ class _Panel:
         )
         for control in (self.selector_calidad, self.selector_fps):
             control.configure(state="readonly" if self.conectada else "disabled")
+        self._actualizar_boton_grabacion()
+
+    def _actualizar_boton_grabacion(self) -> None:
+        if self.guardando_grabacion:
+            self.boton_grabar.configure(text="Saving…", state="disabled")
+        elif self.grabacion is not None:
+            self.boton_grabar.configure(text="Stop recording", state="normal")
+        else:
+            disponible = self.conectada and self.imagen is not None and not self.cerrando
+            self.boton_grabar.configure(text="Start recording", state="normal" if disponible else "disabled")
+
+    def _alternar_grabacion(self) -> None:
+        if self.cerrando or self.guardando_grabacion:
+            return
+        if self.grabacion is not None:
+            self._finalizar_grabacion()
+            return
+        sesion = self.sesion
+        if (
+            sesion is None or not self.conectada or self.imagen is None
+            or time.monotonic() - self.hora_imagen > _SEGUNDOS_SIN_IMAGEN
+        ):
+            return
+
+        archivo = filedialog.asksaveasfilename(
+            parent=self.raiz,
+            title="Save recording",
+            initialfile=datetime.now().strftime("LAN Camera %Y-%m-%d %H-%M-%S.mp4"),
+            defaultextension=".mp4",
+            filetypes=(("MP4 video", "*.mp4"),),
+        )
+        if not archivo:
+            return
+        if (
+            self.cerrando or self.sesion is not sesion or not self.conectada or self.imagen is None
+            or time.monotonic() - self.hora_imagen > _SEGUNDOS_SIN_IMAGEN
+        ):
+            self.estado_grabacion.set("Recording could not start because live video is unavailable.")
+            return
+        try:
+            self.grabacion = Grabacion(Path(archivo), self.imagen)
+        except ValueError as error:
+            self.estado_grabacion.set(str(error))
+            return
+        except RuntimeError:
+            self.estado_grabacion.set("Could not start recording.")
+            return
+        self.estado_grabacion.set("● Recording")
+        self._actualizar_boton_grabacion()
+
+    def _finalizar_grabacion(self) -> None:
+        if self.grabacion is not None and not self.guardando_grabacion:
+            self.guardando_grabacion = True
+            self.grabacion.finalizar()
+            self.estado_grabacion.set("Saving recording…")
+            self._actualizar_boton_grabacion()
+
+    def _actualizar_grabacion(self) -> None:
+        if self.grabacion is None:
+            return
+        resultado = self.grabacion.resultado
+        if resultado is None:
+            return
+
+        self.grabacion = None
+        self.guardando_grabacion = False
+        self.estado_grabacion.set(resultado.error or f"Recording saved to {resultado.ruta}")
+        self._actualizar_boton_grabacion()
+        if resultado.error is not None and self.cerrando:
+            messagebox.showerror("Recording could not be saved", resultado.error, parent=self.raiz)
 
     def _detener(self, mensaje: str = "Disconnected") -> None:
+        self._finalizar_grabacion()
         sesion = self.sesion
         self.sesion = None
         self.conectada = False
@@ -419,6 +501,10 @@ class _Panel:
         self._actualizar_controles()
 
     def _actualizar(self) -> None:
+        self._actualizar_grabacion()
+        if self.cerrando and self.grabacion is None:
+            self.raiz.destroy()
+            return
         self._actualizar_busqueda()
         while True:
             try:
@@ -473,19 +559,30 @@ class _Panel:
             self._mostrar_mensaje("Stream paused")
         elif imagen is not None and time.monotonic() - recibida <= _SEGUNDOS_SIN_IMAGEN:
             self.estado.set("Live")
+            nueva_imagen = self.imagen is None
             self.imagen = imagen
             self.hora_imagen = recibida
             self._ajustar_lienzo()
+            if nueva_imagen:
+                self._actualizar_boton_grabacion()
+            if self.grabacion is not None and not self.guardando_grabacion:
+                self.grabacion.agregar(imagen)
+                if nueva_imagen:
+                    self.estado_grabacion.set("● Recording")
         else:
             self.estado.set("Connected · waiting for video")
             self._mostrar_mensaje("Waiting for a recent frame")
 
     def _mostrar_mensaje(self, texto: str) -> None:
+        if self.grabacion is not None and not self.guardando_grabacion:
+            self.grabacion.pausar()
+            self.estado_grabacion.set("Recording paused · waiting for video")
         self.imagen = None
         self.foto = None
         self.lienzo.itemconfigure(self.objeto_imagen, image="")
         self.lienzo.itemconfigure(self.objeto_mensaje, text=texto, state="normal")
         self._ajustar_lienzo()
+        self._actualizar_boton_grabacion()
 
     def _ajustar_lienzo(self, _evento=None) -> None:
         ancho, alto = self.lienzo.winfo_width(), self.lienzo.winfo_height()
@@ -501,9 +598,13 @@ class _Panel:
             self.lienzo.itemconfigure(self.objeto_mensaje, state="hidden")
 
     def _salir(self) -> None:
+        if self.cerrando:
+            return
+        self.cerrando = True
         self._cancelar_busqueda()
         self._detener()
-        self.raiz.destroy()
+        if self.grabacion is None:
+            self.raiz.destroy()
 
 
 def ejecutar() -> None:
