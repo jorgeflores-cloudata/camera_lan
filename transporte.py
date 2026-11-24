@@ -10,8 +10,8 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import os
 from pathlib import Path
-import secrets
 import select
 import socket
 import ssl
@@ -20,10 +20,6 @@ import tempfile
 import threading
 import time
 from typing import TypedDict
-
-from spake2 import SPAKE2_A, SPAKE2_B
-from spake2.ed25519_basic import NotOnCurve
-from spake2.spake2 import SPAKEError
 
 
 class ErrorConexion(Exception):
@@ -37,6 +33,7 @@ class _Control(TypedDict):
 
 
 _REDES_LAN = tuple(ipaddress.IPv4Network(red) for red in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+_PROTOCOLO = "camara-lan/3"
 _MAX_CONTROL = 1024
 _MAX_JPEG = 2 * 1024 * 1024
 _AUTENTICACION = 6
@@ -64,17 +61,24 @@ def _puerto(puerto: int) -> int:
     return puerto
 
 
-def _leer_codigo(codigo: str) -> bytes:
-    if not isinstance(codigo, str):
-        raise ErrorConexion("Escribe el código privado de 8 dígitos que muestra el anfitrión.")
-    codigo = codigo.strip()
-    if len(codigo) != 8 or any(digito not in "0123456789" for digito in codigo):
-        raise ErrorConexion("El código privado debe contener exactamente 8 dígitos (0–9).")
-    return codigo.encode("ascii")
+def _datos_locales() -> Path:
+    raiz = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME")
+    return (Path(raiz) if raiz else Path.home() / ".local" / "share") / "CamaraLAN"
 
 
-def _tls_servidor(ip: str) -> tuple[ssl.SSLContext, bytes]:
-    # El intercambio con el código privado autentica esta huella efímera.
+def _guardar_nuevo(ruta: Path, contenido: bytes) -> None:
+    """Publica el archivo completo sin reemplazar una identidad ya escrita."""
+    ruta.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(dir=ruta.parent) as temporal:
+        candidato = Path(temporal, ruta.name)
+        candidato.write_bytes(contenido)
+        try:
+            os.link(candidato, ruta)
+        except FileExistsError:
+            pass
+
+
+def _generar_identidad() -> bytes:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -90,25 +94,46 @@ def _tls_servidor(ip: str) -> tuple[ssl.SSLContext, bytes]:
         .public_key(clave.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(ahora - timedelta(minutes=1))
-        .not_valid_after(ahora + timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address(ip))]), critical=False)
+        .not_valid_after(ahora + timedelta(days=3650))
         .sign(clave, hashes.SHA256())
     )
+    return certificado.public_bytes(serialization.Encoding.PEM) + clave.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+
+
+def _tls_servidor() -> ssl.SSLContext:
     contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     contexto.minimum_version = ssl.TLSVersion.TLSv1_2
     contexto.options |= ssl.OP_NO_TICKET
-    # SSLContext requiere rutas de archivo. Se eliminan al cargar el certificado.
-    with tempfile.TemporaryDirectory(prefix="camara-lan-") as temporal:
-        ruta_certificado = Path(temporal, "cert.pem")
-        ruta_clave = Path(temporal, "key.pem")
-        ruta_certificado.write_bytes(certificado.public_bytes(serialization.Encoding.PEM))
-        ruta_clave.write_bytes(clave.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        ))
-        contexto.load_cert_chain(ruta_certificado, ruta_clave)
-    return contexto, certificado.fingerprint(hashes.SHA256())
+    contexto.set_alpn_protocols([_PROTOCOLO])
+    ruta = _datos_locales() / "identidad.pem"
+    try:
+        if not ruta.exists():
+            _guardar_nuevo(ruta, _generar_identidad())
+        contexto.load_cert_chain(ruta)
+    except OSError as error:
+        raise ErrorConexion("No se pudo cargar la identidad local de la cámara. Revisa su archivo y permisos.") from error
+    return contexto
+
+
+def _ruta_huella(ip: str, puerto: int) -> Path:
+    return _datos_locales() / "anfitriones" / f"{ip}-{puerto}.sha256"
+
+
+def _comprobar_huella(ruta: Path, huella: bytes) -> bool:
+    try:
+        fijada = ruta.read_bytes()
+    except FileNotFoundError:
+        return False
+    if not hmac.compare_digest(fijada, huella):
+        raise ErrorConexion(
+            "La identidad de la cámara cambió. Verifica el equipo anfitrión y, si es el correcto, "
+            "usa «Olvidar identidad» antes de volver a conectar."
+        )
+    return True
 
 
 def _restante(vencimiento: float) -> float:
@@ -143,32 +168,6 @@ def _enviar_paquete(conexion: socket.socket, datos: bytes, vencimiento: float) -
     if datos:
         conexion.settimeout(_restante(vencimiento))
         conexion.sendall(datos)
-
-
-def _autenticar(
-    conexion: ssl.SSLSocket, codigo: bytes, huella: bytes, servidor: bool, vencimiento: float,
-) -> None:
-    # SPAKE2 permite usar un código corto sin enviarlo ni exponerlo a pruebas
-    # de diccionario fuera de línea. Vincularlo al certificado local impide
-    # que un intermediario reenvíe el intercambio entre dos conexiones TLS.
-    intercambio = (SPAKE2_B if servidor else SPAKE2_A)(
-        codigo, idA=b"CamaraLAN2/visor", idB=b"CamaraLAN2/anfitrion/" + huella,
-    )
-    _enviar_paquete(conexion, intercambio.start(), vencimiento)
-    mensaje = _recibir_paquete(conexion, 33, vencimiento)
-    if len(mensaje) != 33:
-        raise ErrorConexion("El intercambio del código privado no es válido.")
-    try:
-        clave = intercambio.finish(mensaje)
-    except (ValueError, NotOnCurve, SPAKEError) as error:
-        raise ErrorConexion("El intercambio del código privado no es válido.") from error
-
-    propia, remota = (b"anfitrion", b"visor") if servidor else (b"visor", b"anfitrion")
-    _enviar_paquete(conexion, hmac.digest(clave, b"CamaraLAN2/confirmar/" + propia, "sha256"), vencimiento)
-    confirmacion = _recibir_paquete(conexion, 32, vencimiento)
-    esperada = hmac.digest(clave, b"CamaraLAN2/confirmar/" + remota, "sha256")
-    if not hmac.compare_digest(confirmacion, esperada):
-        raise ErrorConexion("El código privado no coincide con el de esta cámara.")
 
 
 def _recibir_json(conexion: socket.socket, vencimiento: float) -> dict:
@@ -244,13 +243,11 @@ class Servidor:
         self._imagen: bytes | None = None
         self._intentos: deque[float] = deque()
 
-    def iniciar(self) -> str:
+    def iniciar(self) -> None:
         with self._bloqueo:
             if self._escucha is not None:
                 raise ErrorConexion("La cámara ya está escuchando en la red local.")
-            contexto, huella = _tls_servidor(self._ip)
-            codigo = f"{secrets.randbelow(100_000_000):08d}"
-            secreto = _leer_codigo(codigo)
+            contexto = _tls_servidor()
             self._intentos.clear()
             escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
@@ -263,14 +260,13 @@ class Servidor:
                 escucha.settimeout(0.5)
                 self._escucha = escucha
                 threading.Thread(
-                    target=self._escuchar, args=(escucha, contexto, secreto, huella), daemon=True,
+                    target=self._escuchar, args=(escucha, contexto), daemon=True,
                     name="camara-lan-escucha",
                 ).start()
             except BaseException:
                 self._escucha = None
                 escucha.close()
                 raise
-        return codigo
 
     def publicar(self, jpeg: bytes | None) -> None:
         if jpeg is not None and not _es_jpeg(jpeg):
@@ -297,7 +293,7 @@ class Servidor:
             self._sesion.cancelado.set()
             _apagar(self._sesion.conexion)
 
-    def _escuchar(self, escucha: socket.socket, contexto: ssl.SSLContext, secreto: bytes, huella: bytes) -> None:
+    def _escuchar(self, escucha: socket.socket, contexto: ssl.SSLContext) -> None:
         while True:
             try:
                 conexion, (ip, _) = escucha.accept()
@@ -326,15 +322,15 @@ class Servidor:
                 self._sesion = sesion
                 try:
                     threading.Thread(
-                        target=self._atender, args=(sesion, contexto, secreto, huella, ip), daemon=True,
+                        target=self._atender, args=(sesion, contexto, ip), daemon=True,
                         name="camara-lan-sesion",
                     ).start()
                 except RuntimeError:
                     self._sesion = None
                     conexion.close()
 
-    def _atender(self, sesion: _Sesion, contexto: ssl.SSLContext, secreto: bytes, huella: bytes, ip: str) -> None:
-        autenticada = False
+    def _atender(self, sesion: _Sesion, contexto: ssl.SSLContext, ip: str) -> None:
+        solicitada = False
         try:
             with self._bloqueo:
                 if sesion.cancelado.is_set():
@@ -344,18 +340,21 @@ class Servidor:
             vencimiento = time.monotonic() + _AUTENTICACION
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
-            _autenticar(conexion, secreto, huella, True, vencimiento)
-            autenticada = True
+            if conexion.selected_alpn_protocol() != _PROTOCOLO:
+                return
+            if _recibir_json(conexion, vencimiento) != {"tipo": "conectar"}:
+                return
+            solicitada = True
             if not self._aprobar(conexion, sesion.cancelado, ip):
                 if not sesion.cancelado.is_set():
-                    _enviar_json(conexion, {"autorizada": False}, time.monotonic() + 1)
+                    _enviar_json(conexion, {"tipo": "resultado", "autorizada": False}, time.monotonic() + 1)
                 return
             with self._bloqueo:
                 if sesion.cancelado.is_set():
                     return
                 self._imagen = None
                 sesion.autorizada = True
-            _enviar_json(conexion, {"autorizada": True}, time.monotonic() + 1)
+            _enviar_json(conexion, {"tipo": "resultado", "autorizada": True}, time.monotonic() + 1)
             self._transmitir(sesion)
         except (OSError, ErrorConexion):
             pass
@@ -363,7 +362,7 @@ class Servidor:
             sesion.cancelado.set()
             _apagar(sesion.conexion)
             try:
-                if autenticada:
+                if solicitada:
                     self._al_terminar()
             finally:
                 with self._bloqueo:
@@ -418,17 +417,20 @@ class Servidor:
 
 
 class Visor:
-    """Cliente que autentica la cámara con el código privado sin enviarlo."""
+    """Cliente TLS que recuerda la identidad de cada anfitrión aprobado."""
 
-    def __init__(self, ip: str, puerto: int, codigo: str):
+    def __init__(self, ip: str, puerto: int):
         self._ip = _direccion(ip)
         self._puerto = _puerto(puerto)
-        self._secreto = _leer_codigo(codigo)
         self._bloqueo = threading.Lock()
         self._peticion = threading.Lock()
         self._conexion: socket.socket | None = None
         self._cerrado = False
         self._aprobado = False
+
+    @staticmethod
+    def olvidar(ip: str, puerto: int) -> None:
+        _ruta_huella(_direccion(ip), _puerto(puerto)).unlink(missing_ok=True)
 
     def conectar(self) -> None:
         with self._bloqueo:
@@ -445,6 +447,7 @@ class Visor:
             contexto.minimum_version = ssl.TLSVersion.TLSv1_2
             contexto.check_hostname = False
             contexto.verify_mode = ssl.CERT_NONE
+            contexto.set_alpn_protocols([_PROTOCOLO])
             with self._bloqueo:
                 if self._cerrado:
                     raise ErrorConexion("Se canceló la conexión.")
@@ -452,16 +455,31 @@ class Visor:
                 self._conexion = conexion
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
+            if conexion.selected_alpn_protocol() != _PROTOCOLO:
+                raise ErrorConexion("Actualiza ambos equipos a la misma versión de Cámara LAN.")
             certificado = conexion.getpeercert(binary_form=True)
             if not certificado:
                 raise ErrorConexion("La cámara no presentó un certificado.")
-            _autenticar(conexion, self._secreto, hashlib.sha256(certificado).digest(), False, vencimiento)
+            huella = hashlib.sha256(certificado).digest()
+            ruta = _ruta_huella(self._ip, self._puerto)
+            fijada = _comprobar_huella(ruta, huella)
+            _enviar_json(conexion, {"tipo": "conectar"}, vencimiento)
             respuesta = _recibir_json(conexion, time.monotonic() + _APROBACION + 2)
-            if respuesta != {"autorizada": True} or respuesta["autorizada"] is not True:
+            if (
+                set(respuesta) != {"tipo", "autorizada"}
+                or respuesta["tipo"] != "resultado"
+                or type(respuesta["autorizada"]) is not bool
+            ):
+                raise ErrorConexion("La cámara envió una respuesta de conexión inválida.")
+            if not respuesta["autorizada"]:
                 raise ErrorConexion("La cámara no aprobó la solicitud.")
             with self._bloqueo:
                 if self._cerrado:
                     raise ErrorConexion("Se canceló la conexión.")
+                if not fijada:
+                    _guardar_nuevo(ruta, huella)
+                    if not _comprobar_huella(ruta, huella):
+                        raise ErrorConexion("No se pudo guardar la identidad de la cámara.")
                 self._aprobado = True
         except (OSError, ErrorConexion):
             self.cerrar()

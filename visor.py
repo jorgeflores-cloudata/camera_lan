@@ -9,10 +9,11 @@ import time
 import tkinter as tk
 from dataclasses import dataclass, field
 from io import BytesIO
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from PIL import Image, ImageTk
 
+from descubrimiento import CamaraLAN, buscar_camaras
 from transporte import ErrorConexion, Visor
 from version import __version__
 
@@ -42,6 +43,12 @@ class _Sesion:
     cancelada: threading.Event = field(default_factory=threading.Event)
     eventos: queue.SimpleQueue[tuple[str, str]] = field(default_factory=queue.SimpleQueue)
     ultimo: tuple[Image.Image | None, dict, float, _Ajustes] | None = None
+
+
+@dataclass
+class _Busqueda:
+    cancelada: threading.Event = field(default_factory=threading.Event)
+    resultado: queue.SimpleQueue[list[CamaraLAN] | None] = field(default_factory=queue.SimpleQueue)
 
 
 def _direccion(texto: str) -> str:
@@ -101,6 +108,14 @@ def _recibir(sesion: _Sesion) -> None:
         sesion.visor.cerrar()
 
 
+def _buscar_en_red(busqueda: _Busqueda) -> None:
+    try:
+        camaras = buscar_camaras(busqueda.cancelada)
+    except OSError:
+        camaras = None
+    busqueda.resultado.put(camaras)
+
+
 class _Panel:
     def __init__(self, raiz: tk.Tk) -> None:
         self.raiz = raiz
@@ -110,10 +125,12 @@ class _Panel:
         self.imagen: Image.Image | None = None
         self.foto: ImageTk.PhotoImage | None = None
         self.hora_imagen = 0.0
+        self.busqueda: _Busqueda | None = None
+        self.camaras: list[CamaraLAN] = []
 
         self.host = tk.StringVar()
         self.puerto = tk.StringVar(value="8443")
-        self.codigo = tk.StringVar()
+        self.camara_elegida = tk.StringVar()
         self.calidad = tk.StringVar(value="media")
         self.fps = tk.StringVar(value="8")
         self.estado = tk.StringVar(value="Desconectado")
@@ -133,21 +150,29 @@ class _Panel:
         ttk.Label(panel, text="Cámara LAN · Visor", style="Titulo.TLabel").pack(anchor="w")
         ttk.Label(panel, text="El anfitrión debe aprobar cada conexión desde su equipo.").pack(anchor="w", pady=(0, 12))
 
+        busqueda = ttk.Frame(panel)
+        busqueda.pack(fill="x", pady=(0, 12))
+        busqueda.columnconfigure(0, weight=1)
+        ttk.Label(busqueda, text="Cámaras en la red local").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.selector_camaras = ttk.Combobox(busqueda, textvariable=self.camara_elegida, state="disabled")
+        self.selector_camaras.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        self.selector_camaras.bind("<<ComboboxSelected>>", self._elegir_camara)
+        self.boton_buscar = ttk.Button(busqueda, text="Buscar cámaras", command=self._alternar_busqueda)
+        self.boton_buscar.grid(row=1, column=1, sticky="ew")
+
         conexion = ttk.Frame(panel)
         conexion.pack(fill="x")
-        conexion.columnconfigure(2, weight=1)
+        conexion.columnconfigure(0, weight=1)
         self.entrada_host = self._campo(conexion, "IPv4 del anfitrión", self.host, 0, width=17)
         self.entrada_puerto = self._campo(conexion, "Puerto", self.puerto, 1, width=7)
-        self.entrada_codigo = self._campo(
-            conexion, "Código privado (8 dígitos)", self.codigo, 2,
-            show="•", exportselection=False, width=12,
-            validate="key", validatecommand=(raiz.register(self._validar_codigo), "%P"),
-        )
         self.conectar = ttk.Button(conexion, text="Solicitar conexión", command=self._solicitar)
-        self.conectar.grid(row=1, column=3, padx=(0, 8), sticky="ew")
+        self.conectar.grid(row=1, column=2, padx=(0, 8), sticky="ew")
         self.desconectar = ttk.Button(conexion, text="Desconectar", command=self._detener)
-        self.desconectar.grid(row=1, column=4, sticky="ew")
-        self.entrada_codigo.bind("<Return>", self._solicitar_desde_teclado)
+        self.desconectar.grid(row=1, column=3, padx=(0, 8), sticky="ew")
+        self.olvidar = ttk.Button(conexion, text="Olvidar identidad", command=self._olvidar_identidad)
+        self.olvidar.grid(row=1, column=4, sticky="ew")
+        for entrada in (self.entrada_host, self.entrada_puerto):
+            entrada.bind("<Return>", self._solicitar_desde_teclado)
 
         ttk.Label(panel, textvariable=self.estado, style="Estado.TLabel", wraplength=640).pack(anchor="w", pady=10)
         self.lienzo = tk.Canvas(panel, bg=_COLOR_FONDO, highlightthickness=0, takefocus=False)
@@ -178,12 +203,8 @@ class _Panel:
         ttk.Label(panel, textvariable=self.efectivos).pack(anchor="w")
         ttk.Label(panel, textvariable=self.aviso_ajustes).pack(anchor="w")
         self._actualizar_controles()
-        self.entrada_host.focus_set()
+        self.boton_buscar.focus_set()
         raiz.after(45, self._actualizar)
-
-    @staticmethod
-    def _validar_codigo(texto: str) -> bool:
-        return len(texto) <= 8 and all("0" <= caracter <= "9" for caracter in texto)
 
     @staticmethod
     def _campo(panel, titulo, variable, columna, **opciones):
@@ -191,6 +212,89 @@ class _Panel:
         entrada = ttk.Entry(panel, textvariable=variable, **opciones)
         entrada.grid(row=1, column=columna, sticky="ew", padx=(0, 8))
         return entrada
+
+    def _alternar_busqueda(self) -> None:
+        if self.sesion is not None:
+            return
+        if self.busqueda is not None:
+            self._cancelar_busqueda()
+            self.estado.set("Búsqueda cancelada.")
+        else:
+            self.busqueda = _Busqueda()
+            self.estado.set("Buscando cámaras en la red local…")
+            threading.Thread(target=_buscar_en_red, args=(self.busqueda,), daemon=True).start()
+        self._actualizar_controles()
+
+    def _cancelar_busqueda(self) -> None:
+        if self.busqueda is not None:
+            self.busqueda.cancelada.set()
+            self.busqueda = None
+
+    def _actualizar_busqueda(self) -> None:
+        if self.busqueda is None:
+            return
+        try:
+            camaras = self.busqueda.resultado.get_nowait()
+        except queue.Empty:
+            return
+        self.busqueda = None
+        if camaras is None:
+            self.estado.set("No se pudo buscar en la red. Puedes indicar la IPv4 y el puerto.")
+        else:
+            self.camaras = camaras
+            self.selector_camaras.configure(
+                values=tuple(f"{camara.nombre} ({camara.ip}:{camara.puerto})" for camara in camaras),
+            )
+            self.camara_elegida.set("")
+            self.estado.set(
+                "Elige una cámara de la lista o escribe la IPv4 y el puerto."
+                if camaras else "No se encontraron cámaras. Puedes indicar la IPv4 y el puerto."
+            )
+        self._actualizar_controles()
+
+    def _elegir_camara(self, _evento) -> None:
+        indice = self.selector_camaras.current()
+        if 0 <= indice < len(self.camaras):
+            camara = self.camaras[indice]
+            self.host.set(camara.ip)
+            self.puerto.set(str(camara.puerto))
+            self.conectar.focus_set()
+
+    def _destino(self) -> tuple[str, int]:
+        ip = _direccion(self.host.get())
+        try:
+            puerto = int(self.puerto.get())
+        except ValueError:
+            puerto = 0
+        if not 1 <= puerto <= 65_535:
+            raise ValueError("Escribe un puerto entre 1 y 65535.")
+        return ip, puerto
+
+    def _olvidar_identidad(self) -> None:
+        if self.sesion is not None:
+            return
+        try:
+            ip, puerto = self._destino()
+        except ValueError as error:
+            self.estado.set(str(error))
+            return
+        if not messagebox.askyesno(
+            "Olvidar identidad",
+            f"¿Quieres olvidar la identidad guardada para {ip}:{puerto}? "
+            "Comprueba que corresponde al equipo de la cámara antes de volver a conectar.",
+            parent=self.raiz,
+            default="no",
+        ):
+            return
+
+        self._cancelar_busqueda()
+        try:
+            Visor.olvidar(ip, puerto)
+        except (ErrorConexion, OSError) as error:
+            self.estado.set(str(error))
+        else:
+            self.estado.set("Identidad olvidada. Puedes volver a solicitar la conexión.")
+        self._actualizar_controles()
 
     def _solicitar_desde_teclado(self, _evento) -> str:
         self._solicitar()
@@ -201,22 +305,13 @@ class _Panel:
             return
 
         try:
-            ip = _direccion(self.host.get())
-            try:
-                puerto = int(self.puerto.get())
-            except ValueError:
-                puerto = 0
-            if not 1 <= puerto <= 65_535:
-                raise ValueError("Escribe un puerto entre 1 y 65535.")
-            codigo = self.codigo.get().strip()
-            if not codigo:
-                raise ValueError("Escribe el código privado de 8 dígitos que muestra el anfitrión.")
-            visor = Visor(ip, puerto, codigo)
+            ip, puerto = self._destino()
+            visor = Visor(ip, puerto)
         except (ValueError, ErrorConexion) as error:
             self.estado.set(str(error))
             return
 
-        self.codigo.set("")
+        self._cancelar_busqueda()
         self.pausa_solicitada = False
         sesion = _Sesion(visor, self._ajustes())
         self.sesion = sesion
@@ -244,8 +339,13 @@ class _Panel:
 
     def _actualizar_controles(self) -> None:
         conectando = self.sesion is not None
-        for control in (self.entrada_host, self.entrada_puerto, self.entrada_codigo, self.conectar):
+        buscando = self.busqueda is not None
+        for control in (self.entrada_host, self.entrada_puerto, self.conectar, self.olvidar, self.boton_buscar):
             control.configure(state="disabled" if conectando else "normal")
+        self.boton_buscar.configure(text="Cancelar búsqueda" if buscando else "Buscar cámaras")
+        self.selector_camaras.configure(
+            state="readonly" if self.camaras and not conectando and not buscando else "disabled",
+        )
         self.desconectar.configure(state="normal" if conectando else "disabled")
         self.boton_pausa.configure(
             state="normal" if self.aprobada else "disabled",
@@ -269,6 +369,7 @@ class _Panel:
         self._actualizar_controles()
 
     def _actualizar(self) -> None:
+        self._actualizar_busqueda()
         sesion = self.sesion
         if sesion is not None:
             while True:
@@ -342,6 +443,7 @@ class _Panel:
             self.lienzo.itemconfigure(self.objeto_mensaje, state="hidden")
 
     def _salir(self) -> None:
+        self._cancelar_busqueda()
         self._detener()
         self.raiz.destroy()
 

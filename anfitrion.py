@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass, field
+import errno
 from functools import lru_cache
 from io import BytesIO
 import ipaddress
@@ -18,6 +19,7 @@ from tkinter import messagebox, ttk
 import cv2
 from PIL import Image, ImageDraw, ImageTk
 
+from descubrimiento import AnuncioLAN
 from transporte import ErrorConexion, Servidor
 from version import __version__
 
@@ -211,6 +213,7 @@ class _Anfitrion:
         self.eventos: SimpleQueue = SimpleQueue()
         self.generacion = 0
         self.servidor: Servidor | None = None
+        self.anuncio: AnuncioLAN | None = None
         self.solicitud: _Solicitud | None = None
         self.captura: _Captura | None = None
         self.captura_cerrando: _Captura | None = None
@@ -237,7 +240,6 @@ class _Anfitrion:
         self.calidad = tk.StringVar(value=self.calidad_maxima)
         self.fps = tk.StringVar(value=str(self.fps_maximos))
         self.ajustes_remotos = tk.BooleanVar(value=False)
-        self.codigo = tk.StringVar(value="")
         self.estado = tk.StringVar(value="Cámara apagada")
         self.texto_solicitud = tk.StringVar(value="")
 
@@ -295,17 +297,6 @@ class _Anfitrion:
         control.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
         self.campos.append((control, "normal"))
 
-        tarjeta_codigo = ttk.Frame(panel, style="Host.TFrame")
-        tarjeta_codigo.pack(fill="x", pady=(12, 0))
-        ttk.Label(tarjeta_codigo, text="Código privado (8 dígitos)", style="Host.TLabel").pack(anchor="w")
-        codigo = ttk.Entry(
-            tarjeta_codigo, textvariable=self.codigo, state="readonly",
-            font=("Consolas", 18, "bold"), justify="center", width=12,
-        )
-        codigo.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.copiar = ttk.Button(tarjeta_codigo, text="Copiar", command=self._copiar_codigo, state="disabled")
-        self.copiar.pack(side="right")
-
         self.panel_solicitud = ttk.Frame(panel, padding=(0, 8), style="Host.TFrame")
         ttk.Label(
             self.panel_solicitud, textvariable=self.texto_solicitud,
@@ -318,11 +309,11 @@ class _Anfitrion:
 
         botones = ttk.Frame(panel, style="Host.TFrame")
         botones.pack(fill="x", pady=(10, 8))
-        self.habilitar = ttk.Button(botones, text="Generar código", command=self._habilitar)
+        self.habilitar = ttk.Button(botones, text="Habilitar conexión", command=self._habilitar)
         self.habilitar.pack(side="left")
         self.pausar = ttk.Button(botones, text="Pausar cámara", command=self._alternar_pausa, state="disabled")
         self.pausar.pack(side="left", padx=6)
-        self.detener = ttk.Button(botones, text="Detener y cerrar código", command=self._dejar_de_compartir, state="disabled")
+        self.detener = ttk.Button(botones, text="Cerrar conexión", command=self._cerrar_conexion, state="disabled")
         self.detener.pack(side="left")
 
         self.area_previa = tk.Frame(panel, bg="#203047")
@@ -363,15 +354,38 @@ class _Anfitrion:
                 lambda pausa, calidad, fps: self._control(generacion, pausa, calidad, fps),
                 lambda: self.eventos.put(("terminar", generacion, None)),
             )
-            codigo = servidor.iniciar()
+            servidor.iniciar()
         except (ErrorConexion, OSError) as error:
-            messagebox.showerror("Cámara LAN", str(error))
+            mensaje = str(error)
+            if isinstance(error, OSError) and (
+                error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) == 10048
+            ):
+                mensaje = (
+                    f"El puerto {puerto} ya está en uso. Si hay otra versión de Cámara LAN abierta, "
+                    "elige Salir en su icono junto al reloj. También puedes indicar otro puerto "
+                    "en Compartir y en Ver."
+                )
+            messagebox.showerror("Cámara LAN", mensaje)
             return
 
         self.servidor = servidor
-        self.codigo.set(codigo)
-        self._estado("Esperando una solicitud · cámara apagada")
+        anuncio = AnuncioLAN(ip, puerto)
+        try:
+            anuncio.iniciar()
+        except OSError:
+            anuncio.cerrar()
+        else:
+            self.anuncio = anuncio
+        self._mostrar_espera()
         self._botones()
+        if self.bandeja is not None:
+            self.bandeja.update_menu()
+
+    def _mostrar_espera(self) -> None:
+        if self.anuncio is None:
+            self._estado("Esperando solicitud por IP y puerto · cámara apagada")
+        else:
+            self._estado("Disponible en la LAN · cámara apagada")
 
     def _solicitar(self, generacion: int, ip: str, cancelada: threading.Event) -> bool:
         solicitud = _Solicitud(ip, cancelada, time.monotonic() + _TIEMPO_APROBACION)
@@ -420,7 +434,7 @@ class _Anfitrion:
             self.fps_actual = self.fps_maximos
             self._estado("Abriendo cámara para la sesión aprobada", True)
         elif self.servidor is not None:
-            self._estado("Esperando una solicitud · cámara apagada")
+            self._mostrar_espera()
         solicitud.respondida.set()
         self._botones()
 
@@ -486,14 +500,19 @@ class _Anfitrion:
         self.previa.configure(image="", text="Vista previa · cámara apagada")
 
     def _sesion_terminada(self) -> None:
-        # Revoca el código compartido; un nuevo visor necesita un código y aprobación nuevos.
         if self.autorizada:
             self._dejar_de_compartir("El visor se desconectó · cámara apagada")
         else:
             self._responder(False)
 
+    def _cerrar_conexion(self) -> None:
+        self._dejar_de_compartir(f"Conexión cerrada · puerto {self.puerto.get()} liberado")
+
     def _dejar_de_compartir(self, estado: str = "Cámara apagada") -> None:
         self.generacion += 1
+        anuncio, self.anuncio = self.anuncio, None
+        if anuncio is not None:
+            anuncio.cerrar()
         servidor, self.servidor = self.servidor, None
         if servidor is not None:
             servidor.cerrar()
@@ -503,9 +522,10 @@ class _Anfitrion:
         self.cancelacion_activa = None
         self.pausa_local = False
         self.pausa_remota = False
-        self.codigo.set("")
         self._estado(estado)
         self._botones()
+        if servidor is not None and self.bandeja is not None:
+            self.bandeja.update_menu()
 
     def _estado(self, texto: str, activo: bool = False) -> None:
         self.estado.set(texto)
@@ -523,7 +543,6 @@ class _Anfitrion:
         for campo, normal in self.campos:
             campo.configure(state="disabled" if preparado else normal)
         self.habilitar.configure(state="disabled" if preparado else "normal")
-        self.copiar.configure(state="normal" if preparado else "disabled")
         self.detener.configure(state="normal" if preparado else "disabled")
         self.pausar.configure(
             state="normal" if self.autorizada else "disabled",
@@ -560,12 +579,6 @@ class _Anfitrion:
         if self.bandeja is not None:
             self.bandeja.stop()
         self.raiz.destroy()
-
-    def _copiar_codigo(self) -> None:
-        codigo = self.codigo.get()
-        if codigo:
-            self.raiz.clipboard_clear()
-            self.raiz.clipboard_append(codigo)
 
     def _mostrar_fotograma(self) -> None:
         if self.servidor is None or self.captura is None:
@@ -616,6 +629,8 @@ class _Anfitrion:
                 self._aplicar_control(datos)
             elif accion == "terminar":
                 self._sesion_terminada()
+            elif accion == "cerrar_conexion":
+                self._cerrar_conexion()
 
         ahora = time.monotonic()
         if self.servidor is not None and ahora - self.ultima_comprobacion >= .35:
@@ -649,6 +664,11 @@ def ejecutar() -> None:
         "CamaraLAN", _icono(False), "Cámara LAN · cámara apagada",
         pystray.Menu(
             pystray.MenuItem("Abrir", lambda *_: anfitrion.eventos.put(("abrir", None, None)), default=True),
+            pystray.MenuItem(
+                "Cerrar conexión",
+                lambda *_: anfitrion.eventos.put(("cerrar_conexion", anfitrion.generacion, None)),
+                enabled=lambda _: anfitrion.servidor is not None,
+            ),
             pystray.MenuItem("Salir", lambda *_: anfitrion.eventos.put(("salir", None, None))),
         ),
     )
@@ -656,6 +676,8 @@ def ejecutar() -> None:
         anfitrion.bandeja.run_detached()
         raiz.mainloop()
     finally:
+        if anfitrion.anuncio is not None:
+            anfitrion.anuncio.cerrar()
         if anfitrion.servidor is not None:
             anfitrion.servidor.cerrar()
         if anfitrion.captura is not None:

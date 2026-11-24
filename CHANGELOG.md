@@ -1,5 +1,15 @@
 # Cambios
 
+## 1.1.0 — 2026-11-24
+
+- El visor descubre cámaras en la LAN y admite conexión manual por IPv4 y puerto. Cada sesión requiere aprobación en el anfitrión y el video se transmite por TLS.
+- El visor recuerda la identidad de la cámara después de la primera conexión aprobada y bloquea cambios inesperados.
+- Cámara LAN permite una sola instancia por sesión de Windows, incluso si se abre desde otra carpeta o en otro modo.
+- **Cerrar conexión** está disponible en la ventana de Compartir y en el icono junto al reloj. Libera el puerto configurado y apaga la cámara si estaba activa.
+- Si el puerto está ocupado, Cámara LAN muestra el número de puerto y cómo resolver el conflicto.
+
+Actualiza ambos equipos para conectarte sin código.
+
 ## 1.0.1 — 2026-11-24
 
 - Código privado aleatorio de exactamente ocho dígitos, incluidos ceros iniciales.
