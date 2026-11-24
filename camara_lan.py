@@ -5,10 +5,12 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from version import __version__
+
 
 def elegir_modo() -> str | None:
     ventana = tk.Tk()
-    ventana.title("Cámara LAN")
+    ventana.title(f"Cámara LAN · v{__version__}")
     ventana.resizable(False, False)
     panel = ttk.Frame(ventana, padding=24)
     panel.grid()
@@ -34,6 +36,7 @@ def elegir_modo() -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"Cámara LAN {__version__}")
     parser.add_argument("modo", choices=("compartir", "ver"), nargs="?")
     modo = parser.parse_args().modo or elegir_modo()
     if modo is None:

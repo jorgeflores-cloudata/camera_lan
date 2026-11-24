@@ -22,7 +22,7 @@ if errorlevel 1 goto :fallo
 %CAMARA_PY% --version
 %CAMARA_PY% -m pip install --disable-pip-version-check --only-binary=:all: -r requirements.txt
 if errorlevel 1 goto :fallo_paquetes
-%CAMARA_PY% -c "import cv2, cryptography, PIL, pystray"
+%CAMARA_PY% -c "import cv2, cryptography, PIL, pystray, spake2"
 if errorlevel 1 goto :fallo_importacion
 echo Listo. Abre Compartir.cmd o Ver.cmd.
 pause

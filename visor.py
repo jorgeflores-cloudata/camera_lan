@@ -14,6 +14,7 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 
 from transporte import ErrorConexion, Visor
+from version import __version__
 
 
 _RED_LOCAL = tuple(
@@ -119,7 +120,7 @@ class _Panel:
         self.efectivos = tk.StringVar(value="Ajustes efectivos · —")
         self.aviso_ajustes = tk.StringVar()
 
-        raiz.title("Cámara LAN — Visor")
+        raiz.title(f"Cámara LAN — Visor · v{__version__}")
         raiz.minsize(680, 480)
         raiz.geometry("900x630")
         raiz.protocol("WM_DELETE_WINDOW", self._salir)
@@ -138,7 +139,9 @@ class _Panel:
         self.entrada_host = self._campo(conexion, "IPv4 del anfitrión", self.host, 0, width=17)
         self.entrada_puerto = self._campo(conexion, "Puerto", self.puerto, 1, width=7)
         self.entrada_codigo = self._campo(
-            conexion, "Código de emparejamiento", self.codigo, 2, show="•", exportselection=False
+            conexion, "Código privado (8 dígitos)", self.codigo, 2,
+            show="•", exportselection=False, width=12,
+            validate="key", validatecommand=(raiz.register(self._validar_codigo), "%P"),
         )
         self.conectar = ttk.Button(conexion, text="Solicitar conexión", command=self._solicitar)
         self.conectar.grid(row=1, column=3, padx=(0, 8), sticky="ew")
@@ -179,6 +182,10 @@ class _Panel:
         raiz.after(45, self._actualizar)
 
     @staticmethod
+    def _validar_codigo(texto: str) -> bool:
+        return len(texto) <= 8 and all("0" <= caracter <= "9" for caracter in texto)
+
+    @staticmethod
     def _campo(panel, titulo, variable, columna, **opciones):
         ttk.Label(panel, text=titulo).grid(row=0, column=columna, padx=(0, 8), pady=(0, 4), sticky="w")
         entrada = ttk.Entry(panel, textvariable=variable, **opciones)
@@ -203,7 +210,7 @@ class _Panel:
                 raise ValueError("Escribe un puerto entre 1 y 65535.")
             codigo = self.codigo.get().strip()
             if not codigo:
-                raise ValueError("Pega el código de emparejamiento que muestra el anfitrión.")
+                raise ValueError("Escribe el código privado de 8 dígitos que muestra el anfitrión.")
             visor = Visor(ip, puerto, codigo)
         except (ValueError, ErrorConexion) as error:
             self.estado.set(str(error))

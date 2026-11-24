@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import base64
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -20,6 +20,10 @@ import tempfile
 import threading
 import time
 from typing import TypedDict
+
+from spake2 import SPAKE2_A, SPAKE2_B
+from spake2.ed25519_basic import NotOnCurve
+from spake2.spake2 import SPAKEError
 
 
 class ErrorConexion(Exception):
@@ -39,6 +43,8 @@ _AUTENTICACION = 6
 _APROBACION = 30
 _LECTURA = 10
 _SESION = 30 * 60
+_INTENTOS_AUTENTICACION = 5
+_VENTANA_INTENTOS = 60
 _LONGITUD = struct.Struct("!I")
 
 
@@ -58,33 +64,17 @@ def _puerto(puerto: int) -> int:
     return puerto
 
 
-def _b64(datos: bytes) -> str:
-    return base64.urlsafe_b64encode(datos).decode("ascii").rstrip("=")
-
-
-def _desde_b64(texto: str) -> bytes:
-    if len(texto) != 43:
-        raise ErrorConexion("El código de conexión no es válido.")
-    try:
-        datos = base64.b64decode(texto + "=", altchars=b"-_", validate=True)
-    except ValueError as error:
-        raise ErrorConexion("El código de conexión no es válido.") from error
-    if len(datos) != 32 or _b64(datos) != texto:
-        raise ErrorConexion("El código de conexión no es válido.")
-    return datos
-
-
-def _leer_codigo(codigo: str) -> tuple[bytes, bytes]:
+def _leer_codigo(codigo: str) -> bytes:
     if not isinstance(codigo, str):
-        raise ErrorConexion("Pega el código completo que aparece en la ventana de la cámara.")
-    partes = codigo.strip().split(".")
-    if len(partes) != 3 or partes[0] != "LAN1":
-        raise ErrorConexion("Pega el código completo que aparece en la ventana de la cámara.")
-    return _desde_b64(partes[1]), _desde_b64(partes[2])
+        raise ErrorConexion("Escribe el código privado de 8 dígitos que muestra el anfitrión.")
+    codigo = codigo.strip()
+    if len(codigo) != 8 or any(digito not in "0123456789" for digito in codigo):
+        raise ErrorConexion("El código privado debe contener exactamente 8 dígitos (0–9).")
+    return codigo.encode("ascii")
 
 
 def _tls_servidor(ip: str) -> tuple[ssl.SSLContext, bytes]:
-    # El visor autentica el certificado efímero con la huella del código.
+    # El intercambio con el código privado autentica esta huella efímera.
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -153,6 +143,32 @@ def _enviar_paquete(conexion: socket.socket, datos: bytes, vencimiento: float) -
     if datos:
         conexion.settimeout(_restante(vencimiento))
         conexion.sendall(datos)
+
+
+def _autenticar(
+    conexion: ssl.SSLSocket, codigo: bytes, huella: bytes, servidor: bool, vencimiento: float,
+) -> None:
+    # SPAKE2 permite usar un código corto sin enviarlo ni exponerlo a pruebas
+    # de diccionario fuera de línea. Vincularlo al certificado local impide
+    # que un intermediario reenvíe el intercambio entre dos conexiones TLS.
+    intercambio = (SPAKE2_B if servidor else SPAKE2_A)(
+        codigo, idA=b"CamaraLAN2/visor", idB=b"CamaraLAN2/anfitrion/" + huella,
+    )
+    _enviar_paquete(conexion, intercambio.start(), vencimiento)
+    mensaje = _recibir_paquete(conexion, 33, vencimiento)
+    if len(mensaje) != 33:
+        raise ErrorConexion("El intercambio del código privado no es válido.")
+    try:
+        clave = intercambio.finish(mensaje)
+    except (ValueError, NotOnCurve, SPAKEError) as error:
+        raise ErrorConexion("El intercambio del código privado no es válido.") from error
+
+    propia, remota = (b"anfitrion", b"visor") if servidor else (b"visor", b"anfitrion")
+    _enviar_paquete(conexion, hmac.digest(clave, b"CamaraLAN2/confirmar/" + propia, "sha256"), vencimiento)
+    confirmacion = _recibir_paquete(conexion, 32, vencimiento)
+    esperada = hmac.digest(clave, b"CamaraLAN2/confirmar/" + remota, "sha256")
+    if not hmac.compare_digest(confirmacion, esperada):
+        raise ErrorConexion("El código privado no coincide con el de esta cámara.")
 
 
 def _recibir_json(conexion: socket.socket, vencimiento: float) -> dict:
@@ -226,13 +242,16 @@ class Servidor:
         self._escucha: socket.socket | None = None
         self._sesion: _Sesion | None = None
         self._imagen: bytes | None = None
+        self._intentos: deque[float] = deque()
 
     def iniciar(self) -> str:
         with self._bloqueo:
             if self._escucha is not None:
                 raise ErrorConexion("La cámara ya está escuchando en la red local.")
             contexto, huella = _tls_servidor(self._ip)
-            secreto = secrets.token_bytes(32)
+            codigo = f"{secrets.randbelow(100_000_000):08d}"
+            secreto = _leer_codigo(codigo)
+            self._intentos.clear()
             escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -244,14 +263,14 @@ class Servidor:
                 escucha.settimeout(0.5)
                 self._escucha = escucha
                 threading.Thread(
-                    target=self._escuchar, args=(escucha, contexto, secreto), daemon=True,
+                    target=self._escuchar, args=(escucha, contexto, secreto, huella), daemon=True,
                     name="camara-lan-escucha",
                 ).start()
             except BaseException:
                 self._escucha = None
                 escucha.close()
                 raise
-        return f"LAN1.{_b64(huella)}.{_b64(secreto)}"
+        return codigo
 
     def publicar(self, jpeg: bytes | None) -> None:
         if jpeg is not None and not _es_jpeg(jpeg):
@@ -278,7 +297,7 @@ class Servidor:
             self._sesion.cancelado.set()
             _apagar(self._sesion.conexion)
 
-    def _escuchar(self, escucha: socket.socket, contexto: ssl.SSLContext, secreto: bytes) -> None:
+    def _escuchar(self, escucha: socket.socket, contexto: ssl.SSLContext, secreto: bytes, huella: bytes) -> None:
         while True:
             try:
                 conexion, (ip, _) = escucha.accept()
@@ -296,18 +315,25 @@ class Servidor:
                 if self._escucha is not escucha or self._sesion is not None:
                     conexion.close()
                     continue
+                ahora = time.monotonic()
+                while self._intentos and ahora - self._intentos[0] >= _VENTANA_INTENTOS:
+                    self._intentos.popleft()
+                if len(self._intentos) >= _INTENTOS_AUTENTICACION:
+                    conexion.close()
+                    continue
+                self._intentos.append(ahora)
                 sesion = _Sesion(conexion)
                 self._sesion = sesion
                 try:
                     threading.Thread(
-                        target=self._atender, args=(sesion, contexto, secreto, ip), daemon=True,
+                        target=self._atender, args=(sesion, contexto, secreto, huella, ip), daemon=True,
                         name="camara-lan-sesion",
                     ).start()
                 except RuntimeError:
                     self._sesion = None
                     conexion.close()
 
-    def _atender(self, sesion: _Sesion, contexto: ssl.SSLContext, secreto: bytes, ip: str) -> None:
+    def _atender(self, sesion: _Sesion, contexto: ssl.SSLContext, secreto: bytes, huella: bytes, ip: str) -> None:
         autenticada = False
         try:
             with self._bloqueo:
@@ -318,11 +344,7 @@ class Servidor:
             vencimiento = time.monotonic() + _AUTENTICACION
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
-            mensaje = _recibir_json(conexion, vencimiento)
-            if set(mensaje) != {"clave"} or not isinstance(mensaje["clave"], str):
-                return
-            if not hmac.compare_digest(secreto, _desde_b64(mensaje["clave"])):
-                return
+            _autenticar(conexion, secreto, huella, True, vencimiento)
             autenticada = True
             if not self._aprobar(conexion, sesion.cancelado, ip):
                 if not sesion.cancelado.is_set():
@@ -396,12 +418,12 @@ class Servidor:
 
 
 class Visor:
-    """Cliente que verifica el certificado antes de enviar la clave de acceso."""
+    """Cliente que autentica la cámara con el código privado sin enviarlo."""
 
     def __init__(self, ip: str, puerto: int, codigo: str):
         self._ip = _direccion(ip)
         self._puerto = _puerto(puerto)
-        self._huella, self._secreto = _leer_codigo(codigo)
+        self._secreto = _leer_codigo(codigo)
         self._bloqueo = threading.Lock()
         self._peticion = threading.Lock()
         self._conexion: socket.socket | None = None
@@ -431,9 +453,9 @@ class Visor:
             conexion.settimeout(_restante(vencimiento))
             conexion.do_handshake()
             certificado = conexion.getpeercert(binary_form=True)
-            if not certificado or not hmac.compare_digest(hashlib.sha256(certificado).digest(), self._huella):
-                raise ErrorConexion("El código no corresponde al certificado de esta cámara.")
-            _enviar_json(conexion, {"clave": _b64(self._secreto)}, vencimiento)
+            if not certificado:
+                raise ErrorConexion("La cámara no presentó un certificado.")
+            _autenticar(conexion, self._secreto, hashlib.sha256(certificado).digest(), False, vencimiento)
             respuesta = _recibir_json(conexion, time.monotonic() + _APROBACION + 2)
             if respuesta != {"autorizada": True} or respuesta["autorizada"] is not True:
                 raise ErrorConexion("La cámara no aprobó la solicitud.")

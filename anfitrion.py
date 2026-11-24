@@ -19,6 +19,7 @@ import cv2
 from PIL import Image, ImageDraw, ImageTk
 
 from transporte import ErrorConexion, Servidor
+from version import __version__
 
 
 _CALIDADES = {
@@ -247,7 +248,7 @@ class _Anfitrion:
         raiz.after(35, self._bucle)
 
     def _construir(self, direcciones: list[str]) -> None:
-        self.raiz.title("Cámara LAN · Compartir")
+        self.raiz.title(f"Cámara LAN · Compartir · v{__version__}")
         self.raiz.minsize(660, 670)
         self.raiz.geometry("720x750")
         self.raiz.configure(background="#f0f4fa")
@@ -296,8 +297,11 @@ class _Anfitrion:
 
         tarjeta_codigo = ttk.Frame(panel, style="Host.TFrame")
         tarjeta_codigo.pack(fill="x", pady=(12, 0))
-        ttk.Label(tarjeta_codigo, text="Código privado", style="Host.TLabel").pack(anchor="w")
-        codigo = ttk.Entry(tarjeta_codigo, textvariable=self.codigo, state="readonly")
+        ttk.Label(tarjeta_codigo, text="Código privado (8 dígitos)", style="Host.TLabel").pack(anchor="w")
+        codigo = ttk.Entry(
+            tarjeta_codigo, textvariable=self.codigo, state="readonly",
+            font=("Consolas", 18, "bold"), justify="center", width=12,
+        )
         codigo.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.copiar = ttk.Button(tarjeta_codigo, text="Copiar", command=self._copiar_codigo, state="disabled")
         self.copiar.pack(side="right")
