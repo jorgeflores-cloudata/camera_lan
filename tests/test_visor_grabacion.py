@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 import visor
+from zoom import Zoom
 
 
 class GrabacionVisorTests(unittest.TestCase):
@@ -22,6 +23,12 @@ class GrabacionVisorTests(unittest.TestCase):
         self.panel.imagen = Image.new("RGB", (20, 20))
         self.panel.foto = None
         self.panel.hora_imagen = time.monotonic()
+        self.panel.zoom = Zoom()
+        self.panel._arrastre = None
+        self.panel.estado_zoom = Mock()
+        self.panel.boton_zoom_menos = Mock()
+        self.panel.boton_zoom_mas = Mock()
+        self.panel.boton_zoom_restaurar = Mock()
         self.panel.busqueda = None
         self.panel.resultados_recientes = queue.SimpleQueue()
         self.panel.grabacion = None
@@ -97,6 +104,24 @@ class GrabacionVisorTests(unittest.TestCase):
         self.grabacion.finalizar.assert_called_once_with()
         self.assertTrue(self.panel.guardando_grabacion)
         self.assertIs(self.panel.grabacion, self.grabacion)
+
+    def test_graba_el_encuadre_ampliado_en_el_tamano_del_fotograma(self):
+        imagen = Image.new("RGB", (80, 40), "blue")
+        imagen.paste("yellow", (12, 0, 68, 40))
+        self.panel.imagen = imagen
+        self.panel.zoom = Zoom().cambiar(3)
+
+        self.panel._alternar_grabacion()
+        efectivos = {"pausa": False, "calidad": "media", "fps": 8}
+        self.panel._mostrar_resultado(imagen, efectivos, time.monotonic(), self.ajustes)
+
+        primero = self.crear_grabacion.call_args.args[1]
+        siguiente = self.grabacion.agregar.call_args.args[0]
+        for fotograma in (primero, siguiente):
+            self.assertEqual(fotograma.size, imagen.size)
+            self.assertEqual(fotograma.getpixel((5, 20)), (255, 255, 0))
+        self.assertIs(self.panel.imagen, imagen)
+        self.assertEqual(imagen.getpixel((5, 20)), (0, 0, 255))
 
     def test_cerrar_espera_el_mp4_sin_bloquear(self):
         sesion = self.panel.sesion

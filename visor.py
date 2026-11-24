@@ -20,6 +20,7 @@ from grabacion import Grabacion
 from historial import ErrorHistorial, leer_recientes, registrar_conexion
 from transporte import ErrorConexion, Visor
 from version import __version__
+from zoom import ZOOM_MAXIMO, Zoom, ajustar_dimensiones
 
 
 _RED_LOCAL = tuple(
@@ -139,6 +140,8 @@ class _Panel:
         self.imagen: Image.Image | None = None
         self.foto: ImageTk.PhotoImage | None = None
         self.hora_imagen = 0.0
+        self.zoom = Zoom()
+        self._arrastre: tuple[int, int] | None = None
         self.busqueda: _Busqueda | None = None
         self.camaras: list[CamaraLAN] = []
         self.recientes: list[tuple[str, int]] = []
@@ -156,6 +159,7 @@ class _Panel:
         self.efectivos = tk.StringVar(value="Applied settings · —")
         self.aviso_ajustes = tk.StringVar()
         self.estado_grabacion = tk.StringVar()
+        self.estado_zoom = tk.StringVar(value="100%")
 
         raiz.title(f"LAN Camera — Viewer · v{__version__}")
         raiz.minsize(680, 480)
@@ -209,6 +213,25 @@ class _Panel:
             justify="center", font=("Segoe UI", 13)
         )
         self.lienzo.bind("<Configure>", self._ajustar_lienzo)
+        self.lienzo.bind("<MouseWheel>", self._rueda_zoom)
+        if raiz.tk.call("tk", "windowingsystem") == "x11":
+            self.lienzo.bind("<Button-4>", lambda evento: self._zoom_en_punto(evento, 1))
+            self.lienzo.bind("<Button-5>", lambda evento: self._zoom_en_punto(evento, -1))
+        self.lienzo.bind("<ButtonPress-1>", self._iniciar_arrastre)
+        self.lienzo.bind("<B1-Motion>", self._mover_arrastre)
+        self.lienzo.bind("<ButtonRelease-1>", self._terminar_arrastre)
+
+        navegacion = ttk.Frame(panel)
+        navegacion.pack(fill="x", pady=(8, 0))
+        self.boton_zoom_menos = ttk.Button(navegacion, text="−", width=3, command=lambda: self._cambiar_zoom(-1))
+        self.boton_zoom_menos.pack(side="left")
+        ttk.Label(navegacion, textvariable=self.estado_zoom, width=6, anchor="center").pack(side="left")
+        self.boton_zoom_mas = ttk.Button(navegacion, text="+", width=3, command=lambda: self._cambiar_zoom(1))
+        self.boton_zoom_mas.pack(side="left")
+        self.boton_zoom_restaurar = ttk.Button(navegacion, text="Reset zoom", command=self._reiniciar_zoom)
+        self.boton_zoom_restaurar.pack(side="left", padx=(8, 0))
+        self.boton_grabar = ttk.Button(navegacion, text="Start recording", command=self._alternar_grabacion)
+        self.boton_grabar.pack(side="right")
 
         ajustes = ttk.Frame(panel)
         ajustes.pack(fill="x", pady=(12, 4))
@@ -224,8 +247,6 @@ class _Panel:
             ajustes, textvariable=self.fps, values=tuple(str(valor) for valor in range(1, 16)), width=3
         )
         self.selector_fps.pack(side="left")
-        self.boton_grabar = ttk.Button(ajustes, text="Start recording", command=self._alternar_grabacion)
-        self.boton_grabar.pack(side="right")
         self.selector_calidad.bind("<<ComboboxSelected>>", self._actualizar_ajustes)
         self.selector_fps.bind("<<ComboboxSelected>>", self._actualizar_ajustes)
         ttk.Label(panel, textvariable=self.efectivos).pack(anchor="w")
@@ -415,6 +436,81 @@ class _Panel:
         for control in (self.selector_calidad, self.selector_fps):
             control.configure(state="readonly" if self.conectada else "disabled")
         self._actualizar_boton_grabacion()
+        self._actualizar_controles_zoom()
+
+    def _actualizar_controles_zoom(self) -> None:
+        porcentaje = self.zoom.porcentaje
+        disponible = self.imagen is not None and self.conectada and not self.cerrando
+        self.estado_zoom.set(f"{porcentaje}%")
+        self.boton_zoom_menos.configure(state="normal" if disponible and porcentaje > 100 else "disabled")
+        self.boton_zoom_mas.configure(state="normal" if disponible and porcentaje < ZOOM_MAXIMO else "disabled")
+        self.boton_zoom_restaurar.configure(state="normal" if porcentaje > 100 and not self.cerrando else "disabled")
+        self.lienzo.configure(cursor="fleur" if disponible and porcentaje > 100 else "")
+
+    def _cambiar_zoom(self, pasos: int, ancla: tuple[float, float] = (.5, .5)) -> None:
+        if self.imagen is None:
+            return
+        nuevo = self.zoom.cambiar(pasos, ancla)
+        if nuevo != self.zoom:
+            self.zoom = nuevo
+            self._ajustar_lienzo()
+            self._actualizar_controles_zoom()
+
+    def _reiniciar_zoom(self) -> None:
+        self.zoom = Zoom()
+        self._arrastre = None
+        self._ajustar_lienzo()
+        self._actualizar_controles_zoom()
+
+    def _zona_imagen(self) -> tuple[int, int, int, int] | None:
+        if self.imagen is None:
+            return None
+        ancho, alto = self.lienzo.winfo_width(), self.lienzo.winfo_height()
+        if ancho < 2 or alto < 2:
+            return None
+        visible_ancho, visible_alto = ajustar_dimensiones(self.imagen.size, (ancho, alto))
+        return ancho // 2 - visible_ancho // 2, alto // 2 - visible_alto // 2, visible_ancho, visible_alto
+
+    def _rueda_zoom(self, evento) -> str | None:
+        if not evento.delta:
+            return None
+        pasos = max(1, abs(evento.delta) // 120)
+        return self._zoom_en_punto(evento, pasos if evento.delta > 0 else -pasos)
+
+    def _zoom_en_punto(self, evento, pasos: int) -> str | None:
+        zona = self._zona_imagen()
+        if zona is None:
+            return None
+        izquierda, arriba, ancho, alto = zona
+        x = (evento.x - izquierda) / ancho
+        y = (evento.y - arriba) / alto
+        self._cambiar_zoom(pasos, (x, y) if 0 <= x <= 1 and 0 <= y <= 1 else (.5, .5))
+        return "break"
+
+    def _iniciar_arrastre(self, evento) -> None:
+        zona = self._zona_imagen()
+        if zona is None or self.zoom.porcentaje == 100:
+            return
+        izquierda, arriba, ancho, alto = zona
+        if izquierda <= evento.x < izquierda + ancho and arriba <= evento.y < arriba + alto:
+            self._arrastre = (evento.x, evento.y)
+
+    def _mover_arrastre(self, evento) -> None:
+        if self._arrastre is None:
+            return
+        zona = self._zona_imagen()
+        if zona is None:
+            return
+        _, _, ancho, alto = zona
+        x, y = self._arrastre
+        self._arrastre = (evento.x, evento.y)
+        nuevo = self.zoom.desplazar((evento.x - x) / ancho, (evento.y - y) / alto)
+        if nuevo != self.zoom:
+            self.zoom = nuevo
+            self._ajustar_lienzo()
+
+    def _terminar_arrastre(self, _evento) -> None:
+        self._arrastre = None
 
     def _actualizar_boton_grabacion(self) -> None:
         if self.guardando_grabacion:
@@ -454,7 +550,7 @@ class _Panel:
             self.estado_grabacion.set("Recording could not start because live video is unavailable.")
             return
         try:
-            self.grabacion = Grabacion(Path(archivo), self.imagen)
+            self.grabacion = Grabacion(Path(archivo), self.zoom.aplicar(self.imagen))
         except ValueError as error:
             self.estado_grabacion.set(str(error))
             return
@@ -491,6 +587,7 @@ class _Panel:
         self.sesion = None
         self.conectada = False
         self.pausa_solicitada = False
+        self.zoom = Zoom()
         if sesion is not None:
             sesion.cancelada.set()
             sesion.visor.cerrar()
@@ -565,8 +662,9 @@ class _Panel:
             self._ajustar_lienzo()
             if nueva_imagen:
                 self._actualizar_boton_grabacion()
+                self._actualizar_controles_zoom()
             if self.grabacion is not None and not self.guardando_grabacion:
-                self.grabacion.agregar(imagen)
+                self.grabacion.agregar(self.zoom.aplicar(imagen))
                 if nueva_imagen:
                     self.estado_grabacion.set("● Recording")
         else:
@@ -579,10 +677,12 @@ class _Panel:
             self.estado_grabacion.set("Recording paused · waiting for video")
         self.imagen = None
         self.foto = None
+        self._arrastre = None
         self.lienzo.itemconfigure(self.objeto_imagen, image="")
         self.lienzo.itemconfigure(self.objeto_mensaje, text=texto, state="normal")
         self._ajustar_lienzo()
         self._actualizar_boton_grabacion()
+        self._actualizar_controles_zoom()
 
     def _ajustar_lienzo(self, _evento=None) -> None:
         ancho, alto = self.lienzo.winfo_width(), self.lienzo.winfo_height()
@@ -590,10 +690,9 @@ class _Panel:
         self.lienzo.coords(self.objeto_mensaje, ancho // 2, alto // 2)
         self.lienzo.itemconfigure(self.objeto_mensaje, width=max(1, ancho - 28))
         if self.imagen is not None and ancho > 1 and alto > 1:
-            escala = min(ancho / self.imagen.width, alto / self.imagen.height)
-            dimensiones = (max(1, int(self.imagen.width * escala)), max(1, int(self.imagen.height * escala)))
-            reducida = self.imagen.resize(dimensiones, Image.Resampling.BILINEAR)
-            self.foto = ImageTk.PhotoImage(reducida, master=self.raiz)
+            dimensiones = ajustar_dimensiones(self.imagen.size, (ancho, alto))
+            vista = self.zoom.aplicar(self.imagen, dimensiones)
+            self.foto = ImageTk.PhotoImage(vista, master=self.raiz)
             self.lienzo.itemconfigure(self.objeto_imagen, image=self.foto)
             self.lienzo.itemconfigure(self.objeto_mensaje, state="hidden")
 

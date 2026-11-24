@@ -1,6 +1,6 @@
 # LAN Camera
 
-Current version **1.5.0**. See the [changelog](CHANGELOG.md).
+Current version **1.6.0**. See the [changelog](CHANGELOG.md).
 
 Connect two devices to the same local network. Run **Share** on the Windows 11 device with the camera and **View** on the other device.
 
@@ -39,13 +39,17 @@ The host allows up to five connection attempts per minute. If you reach the limi
 
 If the host cannot open the camera, go to **Settings → Privacy & security → Camera** and allow desktop apps to access it. Discovery uses IPv4 multicast over UDP port `55443`. If your network blocks multicast, connect using the host's IPv4 address and port. Guest networks may prevent devices from reaching each other.
 
+## Zoom in the Viewer
+
+Use the mouse wheel over the video or the **+** and **−** buttons to zoom from 100% to 400%. Drag the video when zoomed in to move the view. Click **Reset zoom** to return to the full frame.
+
 ## Record in the Viewer
 
 1. Connect to the camera and wait for live video.
 2. Click **Start recording** and choose where to save the MP4 on the device running the Viewer.
 3. Click **Stop recording** to finish. Disconnecting or closing the Viewer also saves the recording.
 
-The file contains the camera video displayed in the Viewer. Recording resumes when live video returns after a pause.
+The file uses the zoom and framing shown in the Viewer. Recording resumes when live video returns after a pause.
 
 ## Build a Windows executable
 
