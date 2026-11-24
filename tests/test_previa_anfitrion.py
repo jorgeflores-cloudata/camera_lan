@@ -3,6 +3,7 @@
 from io import BytesIO
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -99,6 +100,7 @@ class VistaPreviaTests(unittest.TestCase):
         self.host._ocultar()
         self.host._bucle()
 
+        self.raiz.withdraw.assert_called_once_with()
         self.captura.detener.assert_called_once()
         self.crear_captura.assert_called_once()
         self.servidor.cerrar.assert_not_called()
@@ -106,6 +108,8 @@ class VistaPreviaTests(unittest.TestCase):
         self.assertIs(self.host.servidor, self.servidor)
 
         self.captura.viva.return_value = False
+        self.host._abrir()
+        self.raiz.deiconify.assert_called_once_with()
         self.raiz.state.return_value = "normal"
         self.host._bucle()
         self.crear_captura.assert_called_once()
@@ -113,6 +117,49 @@ class VistaPreviaTests(unittest.TestCase):
         self.host._alternar_pausa()
         self.host._bucle()
         self.assertEqual(self.crear_captura.call_count, 2)
+
+    def test_minimizar_desde_el_titulo_oculta_y_cierra_la_sesion(self):
+        self.host._habilitar()
+        solicitud = self._solicitud()
+        self.host._mostrar_solicitud(solicitud)
+        self.host._responder(True)
+        self.assertTrue(solicitud.aceptada)
+        self.raiz.state.return_value = "iconic"
+
+        self.host._al_ocultar(SimpleNamespace(widget=self.raiz))
+
+        self.raiz.withdraw.assert_called_once_with()
+        self.captura.detener.assert_called_once()
+        self.servidor.cerrar.assert_called_once()
+        self.assertIsNone(self.host.servidor)
+
+    def test_solicitud_en_bandeja_espera_sin_restaurar_y_puede_vencer(self):
+        self.host.bandeja = Mock()
+        self.host._habilitar()
+        self.raiz.state.return_value = "withdrawn"
+        self.host._ocultar()
+        solicitud = self._solicitud()
+        self.host.eventos.put(("solicitud", self.host.generacion, solicitud))
+        self.host.ultima_comprobacion = time.monotonic() - 1
+
+        self.host._bucle()
+
+        self.assertIn("Solicitud pendiente", self.host.bandeja.title)
+        self.raiz.deiconify.assert_not_called()
+        self.raiz.lift.assert_not_called()
+        self.crear_captura.assert_called_once()
+        self.assertIsNone(self.host.captura)
+        self.assertIs(self.host.solicitud, solicitud)
+        self.assertFalse(solicitud.respondida.is_set())
+
+        solicitud.vence = time.monotonic() - 1
+        self.host._bucle()
+
+        self.assertIsNone(self.host.solicitud)
+        self.assertTrue(solicitud.respondida.is_set())
+        self.assertFalse(solicitud.aceptada)
+        self.raiz.deiconify.assert_not_called()
+        self.servidor.cerrar.assert_not_called()
 
     def test_bloquear_el_escritorio_apaga_la_previa_y_rechaza_la_solicitud(self):
         self.host._habilitar()

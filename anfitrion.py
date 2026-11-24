@@ -315,6 +315,7 @@ class _Anfitrion:
         self.pausar.pack(side="left", padx=6)
         self.detener = ttk.Button(botones, text="Cerrar conexión", command=self._cerrar_conexion, state="disabled")
         self.detener.pack(side="left")
+        ttk.Button(botones, text="Minimizar a la bandeja", command=self._ocultar).pack(side="right")
 
         self.area_previa = tk.Frame(panel, bg="#203047")
         self.area_previa.pack(fill="both", expand=True)
@@ -428,7 +429,8 @@ class _Anfitrion:
         self.texto_solicitud.set(f"El dispositivo {solicitud.ip} pide ver la cámara.")
         self.panel_solicitud.pack(fill="x", before=self.pausar.master)
         self._mostrar_espera()
-        self._abrir()
+        if self._ventana_visible():
+            self.raiz.lift()
         self.raiz.bell()
 
     def _responder(self, aceptar: bool) -> None:
@@ -585,8 +587,8 @@ class _Anfitrion:
         return self.raiz.state() in ("normal", "zoomed")
 
     def _al_ocultar(self, evento) -> None:
-        if evento.widget is self.raiz and not self._ventana_visible():
-            self._suspender_si_oculta()
+        if evento.widget is self.raiz and self.raiz.state() == "iconic":
+            self._ocultar()
 
     def _suspender_si_oculta(self) -> None:
         self._suspender_captura("Ventana oculta · cámara apagada")
@@ -685,7 +687,7 @@ class _Anfitrion:
             self.ultima_comprobacion = ahora
             if not _escritorio_disponible():
                 self._suspender_captura("Escritorio bloqueado · cámara apagada")
-            elif not self._ventana_visible():
+            elif not self._ventana_visible() and (self.autorizada or not self.pausa_local):
                 self._suspender_si_oculta()
 
         if self.solicitud is not None:

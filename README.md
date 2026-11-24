@@ -1,6 +1,6 @@
 # Cámara LAN
 
-Versión actual: **1.1.1**. Consulta el historial en [CHANGELOG.md](CHANGELOG.md).
+Versión actual: **1.1.2**. Consulta el historial en [CHANGELOG.md](CHANGELOG.md).
 
 Usa dos equipos conectados a la misma red local. **Compartir** se abre en el equipo Windows 11 que tiene la cámara. **Ver** se abre en el otro equipo.
 
@@ -21,6 +21,8 @@ Si **Preparar.cmd** indica que Tkinter o Tcl/Tk no se pudo cargar, ejecuta `py -
 5. Si el anfitrión habilitó los controles del visor, este puede pausar, reanudar y ajustar la calidad y la frecuencia de imagen dentro de los límites locales. Cualquiera de los dos equipos puede finalizar la sesión.
 
 En el anfitrión, pulsa **Cerrar conexión** en la ventana o en el menú del icono junto al reloj para dejar de anunciar la cámara, liberar el puerto y apagar la cámara si estaba activa. Puedes volver a habilitar la conexión en el mismo puerto.
+
+**Minimizar a la bandeja** quita la ventana de la barra de tareas y deja el icono junto al reloj. También puedes usar el botón de minimizar de Windows. Una solicitud nueva se indica en el icono y espera a que elijas **Abrir** para responder.
 
 Cámara LAN admite una sola instancia por sesión de Windows. Para cambiar de modo o actualizar, cierra la instancia anterior. En **Compartir**, elige **Salir** en el menú del icono junto al reloj.
 

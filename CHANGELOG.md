@@ -1,5 +1,10 @@
 # Cambios
 
+## 1.1.2 — 2026-11-24
+
+- **Minimizar a la bandeja** y el botón de minimizar de Windows dejan solo el icono junto al reloj. El menú del icono permite volver a abrir la ventana.
+- Una solicitud recibida mientras la ventana está oculta se mantiene pendiente sin abrir la ventana automáticamente.
+
 ## 1.1.1 — 2026-11-24
 
 - **Habilitar conexión** abre la vista previa local. El visor recibe video después de que el anfitrión pulse **Aceptar y compartir**.
